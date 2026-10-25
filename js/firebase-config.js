@@ -8,12 +8,12 @@ const ALLOWED_EMAILS = [
   'susanpenaestevez92@gmail.com',
 ];
 
-// 2. Pega aquí el objeto firebaseConfig que te da la consola de Firebase
+// 2. Configuración del proyecto Firebase "mi-presupuesto-9a4f0"
 const FIREBASE_CONFIG = {
-  apiKey: "",
-  authDomain: "",
-  projectId: "",
-  storageBucket: "",
-  messagingSenderId: "",
-  appId: ""
+  apiKey: "AIzaSyC8VJasdN8Z0DG_hentULcBiieBXBQpvaA",
+  authDomain: "mi-presupuesto-9a4f0.firebaseapp.com",
+  projectId: "mi-presupuesto-9a4f0",
+  storageBucket: "mi-presupuesto-9a4f0.firebasestorage.app",
+  messagingSenderId: "1068439132733",
+  appId: "1:1068439132733:web:7923f5a32f317f662ba854"
 };
