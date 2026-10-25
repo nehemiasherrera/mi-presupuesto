@@ -26,6 +26,16 @@ function niceDate(iso) {
   return dt.toLocaleDateString('es-DO', { weekday: 'short', day: 'numeric', month: 'short' });
 }
 function shortDate(iso) { const [y, m, d] = iso.split('-'); return `${d}/${m}/${y.slice(2)}`; }
+function lastSeenLabel(email) {
+  if (typeof Cloud === 'undefined') return 'Sin registro aún';
+  const info = Cloud.activityUsers?.[email.toLowerCase().trim()];
+  if (!info || !info.lastSeenAt) return '⏳ Aún no ha entrado';
+  const dt = new Date(info.lastSeenAt);
+  const diffMin = Math.floor((Date.now() - info.lastSeenAt) / 60000);
+  const timeStr = dt.toLocaleString('es-DO', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+  if (diffMin < 2) return `🟢 Activo ahora (${timeStr})`;
+  return `✅ Última entrada: ${timeStr}`;
+}
 function hexA(hex, a) {
   const h = hex.replace('#', '');
   const n = parseInt(h.length === 3 ? h.split('').map(c => c + c).join('') : h, 16);
@@ -720,20 +730,21 @@ function viewAjustes() {
               <button class="btn btn-primary" data-action="signIn">🔐 Conectar con Google</button>
             </div>
           `}
-          <div class="sub-title">Correos autorizados</div>
+          <div class="sub-title">Correos autorizados y última entrada</div>
           <div class="list compact" style="margin-bottom:12px">
             ${(typeof Cloud !== 'undefined' ? Cloud.owners() : []).map(em => `
               <div class="row">
                 <div class="row-ico" style="background:var(--ok-soft)">👑</div>
-                <div class="row-main"><div class="row-title">${esc(em)}</div><div class="row-meta">Administrador fijo</div></div>
+                <div class="row-main"><div class="row-title">${esc(em)}</div><div class="row-meta">Administrador fijo · ${esc(lastSeenLabel(em))}</div></div>
               </div>`).join('')}
             ${(typeof Cloud !== 'undefined' ? Cloud.extraEmails : []).map(em => `
               <div class="row">
                 <div class="row-ico" style="background:var(--accent-soft)">👤</div>
-                <div class="row-main"><div class="row-title">${esc(em)}</div><div class="row-meta">Invitado autorizado</div></div>
+                <div class="row-main"><div class="row-title">${esc(em)}</div><div class="row-meta">Invitado · ${esc(lastSeenLabel(em))}</div></div>
                 ${Cloud.isOwner() ? `<button class="icon-btn sm" data-action="removeAccessEmail" data-email="${esc(em)}" title="Quitar acceso">🗑️</button>` : ''}
               </div>`).join('')}
           </div>
+          ${typeof Cloud !== 'undefined' && Cloud.lastUpdatedBy ? `<div class="muted small" style="margin-bottom:12px">📝 Último cambio guardado por: <b>${esc(Cloud.lastUpdatedBy)}</b></div>` : ''}
           ${typeof Cloud !== 'undefined' && Cloud.enabled && Cloud.user && Cloud.isOwner() ? `
             <form data-submit="addAccessEmail" class="row-gap" style="margin-bottom:14px">
               <input name="email" type="email" placeholder="nuevo.correo@gmail.com" required style="flex:1">

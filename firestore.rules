@@ -28,5 +28,8 @@ service cloud.firestore {
       allow read: if isAllowed();
       allow write: if isOwner();
     }
+    match /household/activity {
+      allow read, write: if isAllowed();
+    }
   }
 }

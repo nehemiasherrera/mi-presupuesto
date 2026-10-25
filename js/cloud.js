@@ -9,9 +9,12 @@ const Cloud = {
   auth: null,
   unsub: null,
   unsubAccess: null,
+  unsubActivity: null,
   pushTimer: null,
   status: 'local', // 'local' | 'connecting' | 'synced' | 'saving' | 'error'
   extraEmails: [], // correos adicionales autorizados desde Ajustes
+  activityUsers: {}, // { [email]: { name, email, photo, lastSeenAt } }
+  lastUpdatedBy: '',
 
   isConfigured() {
     return typeof FIREBASE_CONFIG !== 'undefined'
@@ -83,6 +86,7 @@ const Cloud = {
   async signOut() {
     if (this.unsub) { this.unsub(); this.unsub = null; }
     if (this.unsubAccess) { this.unsubAccess(); this.unsubAccess = null; }
+    if (this.unsubActivity) { this.unsubActivity(); this.unsubActivity = null; }
     if (this.auth) await this.auth.signOut();
   },
 
@@ -139,11 +143,46 @@ const Cloud = {
     return this.db.collection('household').doc('access');
   },
 
+  activityRef() {
+    return this.db.collection('household').doc('activity');
+  },
+
+  async recordPresence() {
+    if (!this.enabled || !this.user || !this.db) return;
+    const email = (this.user.email || '').toLowerCase().trim();
+    if (!email) return;
+    try {
+      await this.activityRef().set({
+        users: {
+          [email]: {
+            email,
+            name: this.user.displayName || email.split('@')[0],
+            lastSeenAt: Date.now(),
+          },
+        },
+      }, { merge: true });
+    } catch (e) {
+      // Si las reglas de Firestore aún no tienen household/activity publicado, no interrumpir la app
+    }
+  },
+
   startSync() {
     if (this.unsub) this.unsub();
     if (this.unsubAccess) this.unsubAccess();
+    if (this.unsubActivity) this.unsubActivity();
     this.status = 'connecting';
     this.updateBadge();
+
+    // Registrar que este usuario acaba de entrar
+    this.recordPresence();
+
+    // Escuchar registro de entradas/actividad de usuarios
+    this.unsubActivity = this.activityRef().onSnapshot(snap => {
+      if (snap.exists && snap.data()?.users) {
+        this.activityUsers = snap.data().users;
+        if (typeof UI !== 'undefined' && UI.view === 'ajustes' && typeof render === 'function') render();
+      }
+    }, () => {});
 
     // Escuchar lista de correos invitados
     this.unsubAccess = this.accessRef().onSnapshot(snap => {
@@ -163,7 +202,9 @@ const Cloud = {
     let firstSnapshot = true;
     this.unsub = this.docRef().onSnapshot(snap => {
       if (snap.exists) {
-        const remote = snap.data()?.state;
+        const data = snap.data() || {};
+        this.lastUpdatedBy = data.updatedBy || '';
+        const remote = data.state;
         if (remote) {
           const localUpdated = Store.state?.updatedAt || 0;
           const remoteUpdated = remote.updatedAt || 0;
@@ -226,6 +267,7 @@ const Cloud = {
         updatedBy: this.user.email,
         updatedAtServer: firebase.firestore.FieldValue.serverTimestamp(),
       });
+      this.recordPresence();
       this.status = 'synced';
       this.updateBadge();
     } catch (e) {
