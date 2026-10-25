@@ -54,6 +54,10 @@ function quincenaOf(iso) {
   return Number(iso.slice(8, 10)) <= 15 ? 1 : 2;
 }
 
+function defaultLoans() {
+  return [];
+}
+
 function defaultState() {
   return {
     version: 1,
@@ -72,6 +76,7 @@ function defaultState() {
     budgets: {},
     expenses: [],
     debts: [],
+    loans: defaultLoans(),
   };
 }
 
@@ -93,7 +98,7 @@ const Store = {
   normalize() {
     const d = defaultState();
     this.state.settings = { ...d.settings, ...this.state.settings };
-    for (const k of ['categories', 'methods', 'expenses', 'debts']) {
+    for (const k of ['categories', 'methods', 'expenses', 'debts', 'loans']) {
       if (!Array.isArray(this.state[k])) this.state[k] = d[k];
     }
     if (!this.state.budgets) this.state.budgets = {};
@@ -206,6 +211,37 @@ const Store = {
   deleteDebt(id) { this.state.debts = this.state.debts.filter(x => x.id !== id); this.save(); },
   debtPending(d) { return Math.max(0, (Number(d.amount) || 0) - (Number(d.paid) || 0)); },
   totalOwed() { return this.state.debts.reduce((s, d) => s + this.debtPending(d), 0); },
+
+  /* ---------- Préstamos bancarios ---------- */
+  addLoan(l) { const x = { id: uid(), payments: [], ...l }; this.state.loans.push(x); this.save(); return x; },
+  updateLoan(id, patch) { const l = this.state.loans.find(x => x.id === id); if (l) Object.assign(l, patch); this.save(); },
+  deleteLoan(id) { this.state.loans = this.state.loans.filter(x => x.id !== id); this.save(); },
+  loanBreakdown(l) {
+    const balance = Number(l.balance) || 0;
+    const rate = Number(l.rate) || 0;
+    const installment = Number(l.installment) || 0;
+    const monthlyRate = (rate / 100) / 12;
+    const interestPart = balance * monthlyRate;
+    const principalPart = Math.max(0, installment - interestPart);
+    // Cuotas restantes estimadas por fórmula de amortización
+    let remainingInstallments = 0;
+    if (installment > interestPart && monthlyRate > 0 && balance > 0) {
+      remainingInstallments = Math.ceil(-Math.log(1 - (balance * monthlyRate) / installment) / Math.log(1 + monthlyRate));
+    } else if (installment > 0 && balance > 0) {
+      remainingInstallments = Math.ceil(balance / installment);
+    }
+    const totalFuturePayments = remainingInstallments * installment;
+    const totalFutureInterest = Math.max(0, totalFuturePayments - balance);
+    const orig = Math.max(balance, Number(l.originalAmount) || balance);
+    const paidPrincipal = Math.max(0, orig - balance);
+    const progressPct = orig > 0 ? Math.min(100, Math.max(0, ((orig - balance) / orig) * 100)) : 0;
+    return {
+      balance, rate, installment, monthlyRate,
+      interestPart, principalPart,
+      remainingInstallments, totalFuturePayments, totalFutureInterest,
+      orig, paidPrincipal, progressPct,
+    };
+  },
 
   /* ---------- Backup ---------- */
   exportJSON() { return JSON.stringify(this.state, null, 2); },

@@ -3,6 +3,8 @@
 *.xls
 *.csv
 presupuesto-respaldo-*.json
+Prestamos/
+prestamos/
 
 # Archivos temporales y del sistema
 .DS_Store

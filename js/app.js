@@ -150,9 +150,26 @@ const TITLES = {
   resumen: ['Resumen', 'La foto completa de tu mes'],
   presupuesto: ['Presupuesto', 'Planifica tus ingresos y gastos por quincena'],
   gastos: ['Gastos', 'Anota todo lo que gastas, por pequeño que sea'],
+  prestamos: ['Préstamos', 'Balance actual, intereses, cuotas y progreso de amortización'],
   cobros: ['', 'Pedidos y courier que te deben'],
   ajustes: ['Ajustes', 'Personaliza la aplicación'],
 };
+
+function daysUntilDate(iso) {
+  if (!iso) return null;
+  const [y, m, d] = iso.split('-').map(Number);
+  const target = new Date(y, m - 1, d);
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  return Math.round((target - today) / 86400000);
+}
+
+function nextMonthISO(iso) {
+  if (!iso) return todayISO();
+  const [y, m, d] = iso.split('-').map(Number);
+  const next = new Date(y, m, d);
+  return `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}-${String(next.getDate()).padStart(2, '0')}`;
+}
 
 function render() {
   const s = Store.state.settings;
@@ -164,7 +181,7 @@ function render() {
   $('#pageTitle').textContent = UI.view === 'cobros' ? `Cuentas de ${s.debtorName}` : t;
   $('#pageSub').textContent = sub;
   $('#monthLabel').textContent = monthName(UI.month);
-  $('.month-picker').classList.toggle('invisible', UI.view === 'ajustes' || UI.view === 'cobros');
+  $('.month-picker').classList.toggle('invisible', UI.view === 'ajustes' || UI.view === 'cobros' || UI.view === 'prestamos');
   $$('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.view === UI.view));
 
   $('#navCobrosLabel').textContent = s.debtorName || 'Por cobrar';
@@ -173,7 +190,15 @@ function render() {
   badge.hidden = owed <= 0;
   badge.textContent = owed > 0 ? fmt(owed).replace(s.currency, '').trim() : '';
 
-  const views = { resumen: viewResumen, presupuesto: viewPresupuesto, gastos: viewGastos, cobros: viewCobros, ajustes: viewAjustes };
+  const pBadge = $('#navPrestamosBadge');
+  if (pBadge) {
+    const loans = Store.state.loans || [];
+    const soon = loans.map(l => daysUntilDate(l.nextPaymentDate)).filter(d => d !== null && d <= 7).sort((a, b) => a - b);
+    pBadge.hidden = soon.length === 0;
+    if (soon.length > 0) pBadge.textContent = soon[0] < 0 ? 'Vencido' : soon[0] === 0 ? 'Hoy' : `${soon[0]}d`;
+  }
+
+  const views = { resumen: viewResumen, presupuesto: viewPresupuesto, gastos: viewGastos, prestamos: viewPrestamos, cobros: viewCobros, ajustes: viewAjustes };
   $('#view').innerHTML = views[UI.view]();
   $('#view').classList.remove('fade'); void $('#view').offsetWidth; $('#view').classList.add('fade');
 }
@@ -551,6 +576,167 @@ function expenseForm(e = {}) {
   </form>`;
 }
 
+/* ---------------- PRÉSTAMOS ---------------- */
+function viewPrestamos() {
+  const loans = Store.state.loans || [];
+  const totalBalance = sum(loans, l => l.balance);
+  const totalInstallment = sum(loans, l => l.installment);
+  const breakdowns = loans.map(l => ({ loan: l, b: Store.loanBreakdown(l) }));
+  const totalMonthlyInterest = sum(breakdowns, x => x.b.interestPart);
+  const totalMonthlyPrincipal = sum(breakdowns, x => x.b.principalPart);
+  const totalFutureInterest = sum(breakdowns, x => x.b.totalFutureInterest);
+
+  return `
+    <div class="kpis">
+      <div class="kpi highlight">
+        <div class="kpi-label">🏦 Deuda total en préstamos</div>
+        <div class="kpi-value">${fmt(totalBalance)}</div>
+        <div class="kpi-foot">${loans.length} préstamos activos</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">📅 Cuota mensual combinada</div>
+        <div class="kpi-value">${fmt(totalInstallment)}</div>
+        <div class="kpi-foot">Abono capital: ${fmt(totalMonthlyPrincipal)}/mes</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">🔥 Interés mensual actual</div>
+        <div class="kpi-value txt-danger">${fmt(totalMonthlyInterest)}</div>
+        <div class="kpi-foot">${pct(totalMonthlyInterest, totalInstallment)}% de tu cuota se va en interés</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">⏳ Interés futuro estimado</div>
+        <div class="kpi-value txt-warn">${fmt(totalFutureInterest)}</div>
+        <div class="kpi-foot">Si no haces abonos extraordinarios</div>
+      </div>
+    </div>
+
+    <div class="row-gap">
+      <button class="btn btn-primary" data-action="addLoan">＋ Nuevo préstamo</button>
+    </div>
+
+    <div class="grid-2">
+      ${breakdowns.length ? breakdowns.map(({ loan: l, b }) => {
+        const dLeft = daysUntilDate(l.nextPaymentDate);
+        const dBadge = dLeft === null ? '—'
+          : dLeft < 0 ? `<span class="status status-pendiente" style="background:var(--danger-soft);color:var(--danger)">Vencido hace ${Math.abs(dLeft)} días</span>`
+          : dLeft === 0 ? `<span class="status status-pendiente">¡Vence hoy!</span>`
+          : dLeft <= 7 ? `<span class="status status-pendiente">En ${dLeft} días (${shortDate(l.nextPaymentDate)})</span>`
+          : `<span class="status status-pagado">En ${dLeft} días (${shortDate(l.nextPaymentDate)})</span>`;
+        const capPct = pct(b.principalPart, b.installment);
+        const intPct = 100 - capPct;
+        return `
+        <div class="card loan-card" style="border-top: 4px solid ${esc(l.color || '#7c5cff')}">
+          <div class="card-head">
+            <div style="display:flex;align-items:center;gap:10px">
+              <div class="row-ico" style="background:${hexA(l.color || '#7c5cff', 0.18)};color:${esc(l.color || '#7c5cff')};font-weight:800">🏦</div>
+              <div>
+                <h3 style="margin:0">${esc(l.bank)}</h3>
+                <div class="muted small">Préstamo #${esc(l.number || '—')}${l.linkedAccount ? ` · Cta. ${esc(l.linkedAccount)}` : ''}</div>
+              </div>
+            </div>
+            <div class="row-actions">
+              <button class="btn btn-sm btn-primary" data-action="payLoanInstallment" data-id="${l.id}">💳 Registrar pago</button>
+              <button class="icon-btn sm" data-action="editLoan" data-id="${l.id}" title="Editar">✏️</button>
+              <button class="icon-btn sm" data-action="delLoan" data-id="${l.id}" title="Eliminar">🗑️</button>
+            </div>
+          </div>
+
+          <div class="loan-balance-box">
+            <div>
+              <div class="muted small">Balance a la fecha</div>
+              <div class="loan-big-balance">${fmt(b.balance)}</div>
+              <div class="muted small">Monto original: ${fmt(b.orig)} · Pagado de capital: <b>${fmt(b.paidPrincipal)} (${Math.round(b.progressPct)}%)</b></div>
+            </div>
+            <div style="text-align:right">
+              <div class="muted small">Tasa anual</div>
+              <div class="loan-rate-badge" style="color:${esc(l.color || '#7c5cff')}">${b.rate}%</div>
+              <div class="muted small">${esc(l.status || 'Vigente')}</div>
+            </div>
+          </div>
+
+          <div class="progress" style="margin:10px 0 14px" title="${Math.round(b.progressPct)}% del capital saldado">
+            <div class="progress-bar" style="width:${b.progressPct}%;background:${esc(l.color || '#7c5cff')}"></div>
+          </div>
+
+          <div class="loan-grid">
+            <div class="loan-stat">
+              <span class="muted small">Cuota mensual</span>
+              <b>${fmt(b.installment)}</b>
+            </div>
+            <div class="loan-stat">
+              <span class="muted small">Próximo pago</span>
+              <div>${dBadge}</div>
+            </div>
+            <div class="loan-stat">
+              <span class="muted small">Cuotas restantes</span>
+              <b>${b.remainingInstallments} cuotas <span class="muted small">(~${(b.remainingInstallments / 12).toFixed(1)} años)</span></b>
+            </div>
+            <div class="loan-stat">
+              <span class="muted small">Fecha de término</span>
+              <b>${l.endDate ? shortDate(l.endDate) : '—'}${l.rateReviewDate ? ` <span class="muted small">· Rev. tasa ${shortDate(l.rateReviewDate)}</span>` : ''}</b>
+            </div>
+          </div>
+
+          <div class="sub-title" style="margin-top:14px">¿A dónde va tu próxima cuota de ${fmt(b.installment)}?</div>
+          <div class="loan-split-bar">
+            <div class="loan-split-cap" style="width:${capPct}%" title="Abono a capital: ${fmt(b.principalPart)}"></div>
+            <div class="loan-split-int" style="width:${intPct}%" title="Intereses del mes: ${fmt(b.interestPart)}"></div>
+          </div>
+          <div class="loan-split-legend">
+            <span>🟢 <b>Abono a capital:</b> ${fmt(b.principalPart)} (${capPct}%)</span>
+            <span>🔴 <b>Interés del mes:</b> ${fmt(b.interestPart)} (${intPct}%)</span>
+          </div>
+
+          ${(l.payments && l.payments.length) ? `
+            <div class="sub-title" style="margin-top:14px">Últimos pagos registrados</div>
+            <div class="list compact">
+              ${l.payments.slice(-3).reverse().map(p => `
+                <div class="row">
+                  <div class="row-main">
+                    <div class="row-title">${shortDate(p.date)} · ${esc(p.type === 'extra' ? 'Abono extraordinario a capital' : 'Pago de cuota')}</div>
+                    <div class="row-meta">Capital: ${fmt(p.principal)} · Interés: ${fmt(p.interest)}</div>
+                  </div>
+                  <div class="row-amt txt-ok">${fmt(p.amount)}</div>
+                </div>`).join('')}
+            </div>
+          ` : ''}
+        </div>`;
+      }).join('') : `<div class="card" style="grid-column:span 2">${empty('Aún no has agregado préstamos', 'Agrega tus préstamos bancarios o restaura tu archivo de respaldo en Ajustes.')}</div>`}
+    </div>
+    ${loans.length >= 2 ? `<div class="tip">💡 <b>Tip financiero:</b> El préstamo de <b>${esc(loans[0].bank)} (${loans[0].rate}%)</b> genera <b>${fmt(Store.loanBreakdown(loans[0]).interestPart)}</b> de puro interés cada mes, mientras que el de <b>${esc(loans[1].bank)} (${loans[1].rate}%)</b> genera <b>${fmt(Store.loanBreakdown(loans[1]).interestPart)}</b>. Cualquier abono extra a capital te conviene meterlo al de mayor tasa o al de menor saldo para liberar flujo mensual.</div>` : ''}
+  `;
+}
+
+function loanForm(l = {}) {
+  return `<form id="modalForm" class="form">
+    <div class="form-row">
+      <label>Banco / Entidad<input name="bank" required value="${esc(l.bank || '')}" placeholder="Ej. Banco Popular, BHD" autofocus></label>
+      <label>Color identificador<input name="color" type="color" value="${esc(l.color || '#0055a5')}" style="width:100%;height:40px"></label>
+    </div>
+    <div class="form-row">
+      <label>Número de préstamo<input name="number" value="${esc(l.number || '')}" placeholder="Ej. 851114454"></label>
+      <label>Cuenta vinculada (opcional)<input name="linkedAccount" value="${esc(l.linkedAccount || '')}" placeholder="Ej. 855391702"></label>
+    </div>
+    <div class="form-row">
+      <label>Monto original desembolsado<input name="originalAmount" type="number" step="0.01" min="0" required value="${l.originalAmount ?? ''}"></label>
+      <label>Balance actual a la fecha<input name="balance" type="number" step="0.01" min="0" required value="${l.balance ?? ''}"></label>
+    </div>
+    <div class="form-row">
+      <label>Cuota mensual<input name="installment" type="number" step="0.01" min="0" required value="${l.installment ?? ''}"></label>
+      <label>Tasa de interés anual (%)<input name="rate" type="number" step="0.01" min="0" required value="${l.rate ?? ''}"></label>
+    </div>
+    <div class="form-row">
+      <label>Fecha próximo pago<input name="nextPaymentDate" type="date" required value="${l.nextPaymentDate || todayISO()}"></label>
+      <label>Fecha de vencimiento final<input name="endDate" type="date" value="${l.endDate || ''}"></label>
+    </div>
+    <div class="form-row">
+      <label>Próxima revisión de tasa (opcional)<input name="rateReviewDate" type="date" value="${l.rateReviewDate || ''}"></label>
+      <label>Estado<input name="status" value="${esc(l.status || 'Vigente (sin atraso)')}"></label>
+    </div>
+    <div class="form-actions"><button type="button" class="btn" data-action="closeModal">Cancelar</button><button class="btn btn-primary">Guardar</button></div>
+  </form>`;
+}
+
 /* ---------------- COBROS (PRISCILA) ---------------- */
 const DEBT_TYPES = {
   inicial: { label: 'Saldo anterior', icon: '🗂️' },
@@ -863,6 +1049,76 @@ const actions = {
     filteredExpenses().forEach(e => rows.push([e.date, e.desc, Store.cat(e.categoryId).name, Store.method(e.methodId).name, e.amount, quincenaOf(e.date), e.budgetItemId ? 'Sí' : 'No', e.note || '']));
     const csv = rows.map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n');
     download(`gastos-${UI.month}.csv`, '\ufeff' + csv, 'text/csv;charset=utf-8');
+  },
+
+  /* Préstamos */
+  addLoan: () => openModal('Nuevo préstamo', loanForm(), d => {
+    Store.addLoan({
+      bank: d.bank, color: d.color || '#0055a5', number: d.number, linkedAccount: d.linkedAccount,
+      originalAmount: Number(d.originalAmount) || 0, balance: Number(d.balance) || 0,
+      installment: Number(d.installment) || 0, rate: Number(d.rate) || 0,
+      nextPaymentDate: d.nextPaymentDate, endDate: d.endDate, rateReviewDate: d.rateReviewDate,
+      status: d.status || 'Vigente (sin atraso)',
+    });
+    toast('Préstamo agregado');
+  }),
+  editLoan: el => {
+    const l = (Store.state.loans || []).find(x => x.id === el.dataset.id);
+    if (!l) return;
+    openModal(`Editar · ${l.bank}`, loanForm(l), d => {
+      Store.updateLoan(l.id, {
+        bank: d.bank, color: d.color || l.color, number: d.number, linkedAccount: d.linkedAccount,
+        originalAmount: Number(d.originalAmount) || 0, balance: Number(d.balance) || 0,
+        installment: Number(d.installment) || 0, rate: Number(d.rate) || 0,
+        nextPaymentDate: d.nextPaymentDate, endDate: d.endDate, rateReviewDate: d.rateReviewDate,
+        status: d.status || 'Vigente (sin atraso)',
+      });
+      toast('Préstamo actualizado');
+    });
+  },
+  delLoan: el => withUndo('Préstamo eliminado', () => Store.deleteLoan(el.dataset.id)),
+  payLoanInstallment: el => {
+    const l = (Store.state.loans || []).find(x => x.id === el.dataset.id);
+    if (!l) return;
+    const b = Store.loanBreakdown(l);
+    openModal(`Registrar pago · ${l.bank}`, `<form id="modalForm" class="form">
+      <div class="form-row">
+        <label>Tipo de pago
+          <select name="type">
+            <option value="cuota">Cuota regular del mes</option>
+            <option value="extra">Abono extraordinario a capital (sin interés)</option>
+          </select>
+        </label>
+        <label>Fecha<input name="date" type="date" required value="${todayISO()}"></label>
+      </div>
+      <div class="big-amount"><span>${esc(Store.state.settings.currency)}</span><input name="amount" type="number" step="0.01" min="0.01" value="${b.installment}" required autofocus></div>
+      <p class="muted small">Si es <b>Cuota regular</b>, se descontarán aprox. <b>${fmt(b.interestPart)}</b> de interés y el resto (<b>${fmt(b.principalPart)}</b>) bajará el balance del préstamo y avanzará la fecha del próximo pago un mes.</p>
+      <label class="toggle"><input type="checkbox" name="recordExpense" checked><span></span> Anotar también en la pestaña de Gastos</label>
+      <div class="form-actions"><button type="button" class="btn" data-action="closeModal">Cancelar</button><button class="btn btn-primary">Aplicar pago</button></div>
+    </form>`, d => {
+      const amt = Number(d.amount) || 0;
+      const isExtra = d.type === 'extra';
+      const interest = isExtra ? 0 : Math.min(amt, b.interestPart);
+      const principal = Math.max(0, amt - interest);
+      const newBalance = Math.max(0, +(b.balance - principal).toFixed(2));
+      const payments = Array.isArray(l.payments) ? [...l.payments] : [];
+      payments.push({ id: uid(), date: d.date, amount: amt, principal: +principal.toFixed(2), interest: +interest.toFixed(2), type: d.type });
+      const patch = { balance: newBalance, payments };
+      if (!isExtra && l.nextPaymentDate) patch.nextPaymentDate = nextMonthISO(l.nextPaymentDate);
+      Store.updateLoan(l.id, patch);
+      if (d.recordExpense) {
+        Store.addExpense({
+          amount: amt,
+          desc: `${isExtra ? 'Abono capital' : 'Cuota'} ${l.bank}`,
+          categoryId: 'deudas',
+          methodId: 'transferencia',
+          date: d.date,
+          note: `Capital: ${fmt(principal)} · Interés: ${fmt(interest)}`,
+          createdAt: Date.now(),
+        });
+      }
+      toast(`Pago aplicado · Nuevo balance: ${fmt(newBalance)}`);
+    });
   },
 
   /* Cobros */

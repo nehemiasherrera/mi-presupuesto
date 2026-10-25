@@ -206,11 +206,17 @@ const Cloud = {
         this.lastUpdatedBy = data.updatedBy || '';
         const remote = data.state;
         if (remote) {
+          // Si este navegador ya tenía préstamos cargados localmente y en la nube aún no estaban, conservarlos y subirlos
+          const localLoans = Store.state?.loans || [];
+          const remoteLoans = remote.loans || [];
+          const needPushLoans = firstSnapshot && localLoans.length > 0 && remoteLoans.length === 0;
           const localUpdated = Store.state?.updatedAt || 0;
           const remoteUpdated = remote.updatedAt || 0;
           if (firstSnapshot || remoteUpdated > localUpdated) {
+            if (needPushLoans) remote.loans = localLoans;
             Store.applyRemote(remote);
             if (typeof render === 'function') render();
+            if (needPushLoans) this.pushImmediate(Store.state);
           }
         }
       } else if (firstSnapshot && Store.hasMeaningfulData()) {
