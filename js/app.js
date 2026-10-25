@@ -714,33 +714,36 @@ function viewAjustes() {
           <div class="card-head"><h3>☁️ Nube y personas con acceso</h3></div>
           ${typeof Cloud !== 'undefined' && Cloud.enabled && Cloud.user ? `
             <p class="muted">Sesión iniciada como <b>${esc(Cloud.user.email)}</b>. Todo lo que anotes se sincroniza en tiempo real.</p>
-            <div class="sub-title">Correos autorizados</div>
-            <div class="list compact" style="margin-bottom:12px">
-              ${Cloud.owners().map(em => `
-                <div class="row">
-                  <div class="row-ico" style="background:var(--ok-soft)">👑</div>
-                  <div class="row-main"><div class="row-title">${esc(em)}</div><div class="row-meta">Administrador fijo</div></div>
-                </div>`).join('')}
-              ${Cloud.extraEmails.map(em => `
-                <div class="row">
-                  <div class="row-ico" style="background:var(--accent-soft)">👤</div>
-                  <div class="row-main"><div class="row-title">${esc(em)}</div><div class="row-meta">Invitado autorizado</div></div>
-                  ${Cloud.isOwner() ? `<button class="icon-btn sm" data-action="removeAccessEmail" data-email="${esc(em)}" title="Quitar acceso">🗑️</button>` : ''}
-                </div>`).join('')}
+          ` : `
+            <p class="muted">Aún no has iniciado sesión en la nube. Haz clic abajo para conectar tu cuenta de Google.</p>
+            <div class="row-gap" style="margin-bottom:14px">
+              <button class="btn btn-primary" data-action="signIn">🔐 Conectar con Google</button>
             </div>
-            ${Cloud.isOwner() ? `
-              <form data-submit="addAccessEmail" class="row-gap" style="margin-bottom:14px">
-                <input name="email" type="email" placeholder="nuevo.correo@gmail.com" required style="flex:1">
-                <button class="btn btn-primary">＋ Autorizar correo</button>
-              </form>
-            ` : ''}
+          `}
+          <div class="sub-title">Correos autorizados</div>
+          <div class="list compact" style="margin-bottom:12px">
+            ${(typeof Cloud !== 'undefined' ? Cloud.owners() : []).map(em => `
+              <div class="row">
+                <div class="row-ico" style="background:var(--ok-soft)">👑</div>
+                <div class="row-main"><div class="row-title">${esc(em)}</div><div class="row-meta">Administrador fijo</div></div>
+              </div>`).join('')}
+            ${(typeof Cloud !== 'undefined' ? Cloud.extraEmails : []).map(em => `
+              <div class="row">
+                <div class="row-ico" style="background:var(--accent-soft)">👤</div>
+                <div class="row-main"><div class="row-title">${esc(em)}</div><div class="row-meta">Invitado autorizado</div></div>
+                ${Cloud.isOwner() ? `<button class="icon-btn sm" data-action="removeAccessEmail" data-email="${esc(em)}" title="Quitar acceso">🗑️</button>` : ''}
+              </div>`).join('')}
+          </div>
+          ${typeof Cloud !== 'undefined' && Cloud.enabled && Cloud.user && Cloud.isOwner() ? `
+            <form data-submit="addAccessEmail" class="row-gap" style="margin-bottom:14px">
+              <input name="email" type="email" placeholder="nuevo.correo@gmail.com" required style="flex:1">
+              <button class="btn btn-primary">＋ Autorizar correo</button>
+            </form>
             <div class="row-gap">
               <button class="btn" data-action="forceCloudPush">☁️ Subir mis datos ahora</button>
               <button class="btn btn-ghost danger" data-action="signOut">🚪 Cerrar sesión</button>
             </div>
-          ` : `
-            <p class="muted">Actualmente estás en <b>modo local</b>. Inicia sesión en la nube para gestionar las personas con acceso.</p>
-          `}
+          ` : ''}
         </div>
 
         <div class="card">
@@ -918,6 +921,7 @@ const actions = {
   exportJSON: () => download(`presupuesto-respaldo-${todayISO()}.json`, Store.exportJSON(), 'application/json'),
   resetEmpty: () => { if (confirm('¿Seguro? Se borrarán TODOS tus datos (descarga un respaldo antes).')) withUndo('Datos borrados', () => Store.reset()); },
   forceCloudPush: () => { if (typeof Cloud !== 'undefined') { Cloud.pushImmediate(Store.state); toast('☁️ Datos enviados a la nube'); } },
+  signIn: () => { if (typeof Cloud !== 'undefined') Cloud.signIn(); },
   signOut: () => { if (typeof Cloud !== 'undefined') Cloud.signOut(); },
   removeAccessEmail: async el => {
     const email = el.dataset.email;
