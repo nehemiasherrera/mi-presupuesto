@@ -1,0 +1,12 @@
+# Archivos sensibles con tus datos personales (NO subir a GitHub)
+*.xlsx
+*.xls
+*.csv
+presupuesto-respaldo-*.json
+
+# Archivos temporales y del sistema
+.DS_Store
+Thumbs.db
+node_modules/
+.firebase/
+.firebaserc
