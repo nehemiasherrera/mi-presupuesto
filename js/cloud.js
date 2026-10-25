@@ -35,7 +35,8 @@ const Cloud = {
   },
 
   init() {
-    if (!this.isConfigured() || typeof firebase === 'undefined') {
+    // Si se abre como archivo local (file://), Google Auth no permite popups; usar modo local sin bloqueo
+    if (location.protocol === 'file:' || !this.isConfigured() || typeof firebase === 'undefined') {
       this.status = 'local';
       this.updateBadge();
       return;
