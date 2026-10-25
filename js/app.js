@@ -711,15 +711,35 @@ function viewAjustes() {
         </div>
 
         <div class="card">
-          <div class="card-head"><h3>☁️ Nube y acceso privado</h3></div>
+          <div class="card-head"><h3>☁️ Nube y personas con acceso</h3></div>
           ${typeof Cloud !== 'undefined' && Cloud.enabled && Cloud.user ? `
-            <p class="muted">Sesión iniciada como <b>${esc(Cloud.user.email)}</b>. Todo lo que anotes se sincroniza en tiempo real con Susan.</p>
+            <p class="muted">Sesión iniciada como <b>${esc(Cloud.user.email)}</b>. Todo lo que anotes se sincroniza en tiempo real.</p>
+            <div class="sub-title">Correos autorizados</div>
+            <div class="list compact" style="margin-bottom:12px">
+              ${Cloud.owners().map(em => `
+                <div class="row">
+                  <div class="row-ico" style="background:var(--ok-soft)">👑</div>
+                  <div class="row-main"><div class="row-title">${esc(em)}</div><div class="row-meta">Administrador fijo</div></div>
+                </div>`).join('')}
+              ${Cloud.extraEmails.map(em => `
+                <div class="row">
+                  <div class="row-ico" style="background:var(--accent-soft)">👤</div>
+                  <div class="row-main"><div class="row-title">${esc(em)}</div><div class="row-meta">Invitado autorizado</div></div>
+                  ${Cloud.isOwner() ? `<button class="icon-btn sm" data-action="removeAccessEmail" data-email="${esc(em)}" title="Quitar acceso">🗑️</button>` : ''}
+                </div>`).join('')}
+            </div>
+            ${Cloud.isOwner() ? `
+              <form data-submit="addAccessEmail" class="row-gap" style="margin-bottom:14px">
+                <input name="email" type="email" placeholder="nuevo.correo@gmail.com" required style="flex:1">
+                <button class="btn btn-primary">＋ Autorizar correo</button>
+              </form>
+            ` : ''}
             <div class="row-gap">
               <button class="btn" data-action="forceCloudPush">☁️ Subir mis datos ahora</button>
               <button class="btn btn-ghost danger" data-action="signOut">🚪 Cerrar sesión</button>
             </div>
           ` : `
-            <p class="muted">Actualmente estás en <b>modo local</b>. Cuando pegues las llaves de Firebase en <code>js/firebase-config.js</code>, la app pedirá inicio de sesión con Google y sincronizará entre tus dispositivos y los de Susan.</p>
+            <p class="muted">Actualmente estás en <b>modo local</b>. Inicia sesión en la nube para gestionar las personas con acceso.</p>
           `}
         </div>
 
@@ -899,6 +919,17 @@ const actions = {
   resetEmpty: () => { if (confirm('¿Seguro? Se borrarán TODOS tus datos (descarga un respaldo antes).')) withUndo('Datos borrados', () => Store.reset()); },
   forceCloudPush: () => { if (typeof Cloud !== 'undefined') { Cloud.pushImmediate(Store.state); toast('☁️ Datos enviados a la nube'); } },
   signOut: () => { if (typeof Cloud !== 'undefined') Cloud.signOut(); },
+  removeAccessEmail: async el => {
+    const email = el.dataset.email;
+    if (!confirm(`¿Quitar el acceso a ${email}?`)) return;
+    try {
+      await Cloud.removeAllowedEmail(email);
+      toast(`Acceso revocado a ${email}`);
+      render();
+    } catch (e) {
+      toast(e.message || 'No se pudo quitar el correo', { type: 'err' });
+    }
+  },
 };
 
 /* =========================================================
@@ -922,6 +953,16 @@ document.addEventListener('submit', ev => {
     modalSubmit(formData(form));
     closeModal();
     render();
+    return;
+  }
+  if (form.dataset.submit === 'addAccessEmail') {
+    const d = formData(form);
+    if (!d.email) return;
+    Cloud.addAllowedEmail(d.email).then(() => {
+      toast(`✅ Acceso otorgado a ${d.email}`);
+      form.reset();
+      render();
+    }).catch(e => toast(e.message || 'No se pudo agregar el correo', { type: 'err' }));
     return;
   }
   if (form.dataset.submit === 'quickExpense') {

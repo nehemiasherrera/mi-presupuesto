@@ -1,5 +1,5 @@
 /* =========================================================
-   cloud.js — Autenticación con Google y sincronización en tiempo real (Firestore)
+   cloud.js — Autenticación con Google, control de accesos y sincronización (Firestore)
    ========================================================= */
 
 const Cloud = {
@@ -8,13 +8,30 @@ const Cloud = {
   db: null,
   auth: null,
   unsub: null,
+  unsubAccess: null,
   pushTimer: null,
   status: 'local', // 'local' | 'connecting' | 'synced' | 'saving' | 'error'
+  extraEmails: [], // correos adicionales autorizados desde Ajustes
 
   isConfigured() {
     return typeof FIREBASE_CONFIG !== 'undefined'
       && FIREBASE_CONFIG
       && Boolean(FIREBASE_CONFIG.apiKey && FIREBASE_CONFIG.projectId);
+  },
+
+  owners() {
+    return (typeof ALLOWED_EMAILS !== 'undefined' ? ALLOWED_EMAILS : [])
+      .map(e => e.toLowerCase().trim());
+  },
+
+  isOwner(email = this.user?.email) {
+    if (!email) return false;
+    return this.owners().includes(email.toLowerCase().trim());
+  },
+
+  allAllowedEmails() {
+    const set = new Set([...this.owners(), ...this.extraEmails.map(e => e.toLowerCase().trim())]);
+    return [...set];
   },
 
   init() {
@@ -35,7 +52,6 @@ const Cloud = {
       this.auth = firebase.auth();
       this.db = firebase.firestore();
 
-      // Mostrar pantalla de acceso hasta verificar sesión
       const gate = document.getElementById('authGate');
       if (gate) gate.hidden = false;
 
@@ -45,13 +61,6 @@ const Cloud = {
       this.status = 'error';
       this.updateBadge();
     }
-  },
-
-  isAllowedEmail(email) {
-    if (!email) return false;
-    const list = (typeof ALLOWED_EMAILS !== 'undefined' ? ALLOWED_EMAILS : [])
-      .map(e => e.toLowerCase().trim());
-    return list.includes(email.toLowerCase().trim());
   },
 
   async signIn() {
@@ -72,10 +81,11 @@ const Cloud = {
 
   async signOut() {
     if (this.unsub) { this.unsub(); this.unsub = null; }
+    if (this.unsubAccess) { this.unsubAccess(); this.unsubAccess = null; }
     if (this.auth) await this.auth.signOut();
   },
 
-  onUserChange(user) {
+  async onUserChange(user) {
     const gate = document.getElementById('authGate');
     const msg = document.getElementById('authGateMsg');
 
@@ -87,9 +97,25 @@ const Cloud = {
       return;
     }
 
-    if (!this.isAllowedEmail(user.email)) {
+    // Verificamos si es propietario o si tiene permiso en Firestore (household/access)
+    const email = (user.email || '').toLowerCase().trim();
+    let allowed = this.isOwner(email);
+
+    if (!allowed) {
+      try {
+        const snap = await this.accessRef().get();
+        const list = (snap.exists && Array.isArray(snap.data()?.emails))
+          ? snap.data().emails.map(e => String(e).toLowerCase().trim())
+          : [];
+        allowed = list.includes(email);
+      } catch (e) {
+        allowed = false;
+      }
+    }
+
+    if (!allowed) {
       const badEmail = user.email;
-      this.auth.signOut();
+      await this.auth.signOut();
       if (gate) gate.hidden = false;
       if (msg) {
         msg.hidden = false;
@@ -108,10 +134,30 @@ const Cloud = {
     return this.db.collection('household').doc('main');
   },
 
+  accessRef() {
+    return this.db.collection('household').doc('access');
+  },
+
   startSync() {
     if (this.unsub) this.unsub();
+    if (this.unsubAccess) this.unsubAccess();
     this.status = 'connecting';
     this.updateBadge();
+
+    // Escuchar lista de correos invitados
+    this.unsubAccess = this.accessRef().onSnapshot(snap => {
+      if (snap.exists && Array.isArray(snap.data()?.emails)) {
+        this.extraEmails = snap.data().emails.map(e => String(e).toLowerCase().trim()).filter(Boolean);
+      } else {
+        this.extraEmails = [];
+      }
+      // Si el usuario actual era invitado y fue revocado en vivo, cerrar su sesión
+      if (this.user && !this.isOwner(this.user.email) && !this.extraEmails.includes(this.user.email.toLowerCase().trim())) {
+        this.signOut();
+        return;
+      }
+      if (typeof UI !== 'undefined' && UI.view === 'ajustes' && typeof render === 'function') render();
+    }, () => {});
 
     let firstSnapshot = true;
     this.unsub = this.docRef().onSnapshot(snap => {
@@ -126,7 +172,6 @@ const Cloud = {
           }
         }
       } else if (firstSnapshot && Store.hasMeaningfulData()) {
-        // Primera vez en la nube y este navegador ya tiene tus datos: los subimos automáticamente
         this.pushImmediate(Store.state);
         if (typeof toast === 'function') toast('☁️ Tus datos locales se subieron a la nube');
       }
@@ -137,6 +182,30 @@ const Cloud = {
       console.error('Error sincronizando con Firestore:', err);
       this.status = 'error';
       this.updateBadge();
+    });
+  },
+
+  async addAllowedEmail(rawEmail) {
+    if (!this.isOwner()) throw new Error('Solo los administradores principales pueden gestionar accesos.');
+    const email = String(rawEmail || '').toLowerCase().trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Ingresa un correo electrónico válido.');
+    if (this.owners().includes(email)) throw new Error('Ese correo ya es administrador fijo.');
+    const next = [...new Set([...this.extraEmails, email])];
+    await this.accessRef().set({
+      emails: next,
+      updatedBy: this.user.email,
+      updatedAtServer: firebase.firestore.FieldValue.serverTimestamp(),
+    });
+  },
+
+  async removeAllowedEmail(rawEmail) {
+    if (!this.isOwner()) throw new Error('Solo los administradores principales pueden gestionar accesos.');
+    const email = String(rawEmail || '').toLowerCase().trim();
+    const next = this.extraEmails.filter(e => e !== email);
+    await this.accessRef().set({
+      emails: next,
+      updatedBy: this.user.email,
+      updatedAtServer: firebase.firestore.FieldValue.serverTimestamp(),
     });
   },
 
