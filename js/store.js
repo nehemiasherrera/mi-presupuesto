@@ -58,6 +58,13 @@ function defaultLoans() {
   return [];
 }
 
+function defaultDebtors(primaryName = 'Priscila') {
+  return [
+    { id: 'priscila', name: primaryName || 'Priscila', icon: '👩🏻', color: '#7c5cff' },
+    { id: 'raul',     name: 'Raúl',                    icon: '👨🏻', color: '#3fa7ff' },
+  ];
+}
+
 function defaultState() {
   return {
     version: 1,
@@ -73,6 +80,7 @@ function defaultState() {
     },
     categories: structuredClone(DEFAULT_CATEGORIES),
     methods: structuredClone(DEFAULT_METHODS),
+    debtors: defaultDebtors(),
     budgets: {},
     expenses: [],
     debts: [],
@@ -101,6 +109,15 @@ const Store = {
     for (const k of ['categories', 'methods', 'expenses', 'debts', 'loans']) {
       if (!Array.isArray(this.state[k])) this.state[k] = d[k];
     }
+    if (!Array.isArray(this.state.debtors) || this.state.debtors.length === 0) {
+      this.state.debtors = defaultDebtors(this.state.settings.debtorName);
+    } else if (!this.state.debtors.some(p => p.id === 'raul' || (p.name || '').toLowerCase().includes('raul') || (p.name || '').toLowerCase().includes('raúl'))) {
+      this.state.debtors.push({ id: 'raul', name: 'Raúl', icon: '👨🏻', color: '#3fa7ff' });
+    }
+    const firstDebtorId = this.state.debtors[0].id;
+    this.state.debts.forEach(x => {
+      if (!x.debtorId) x.debtorId = firstDebtorId;
+    });
     if (!this.state.budgets) this.state.budgets = {};
   },
 
@@ -205,12 +222,49 @@ const Store = {
     this.save();
   },
 
-  /* ---------- Cuentas por cobrar (Priscila) ---------- */
-  addDebt(d)  { const x = { id: uid(), paid: 0, ...d }; this.state.debts.push(x); this.save(); return x; },
+  /* ---------- Cuentas por cobrar (Priscila, Raúl, etc.) ---------- */
+  debtor(id) {
+    return (this.state.debtors || []).find(p => p.id === id)
+      || (this.state.debtors || [])[0]
+      || { id: 'priscila', name: this.state.settings.debtorName || 'Priscila', icon: '👤', color: '#7c5cff' };
+  },
+  addDebtor(p) {
+    const x = { id: uid(), icon: '👤', color: ACCENTS[this.state.debtors.length % ACCENTS.length], ...p };
+    this.state.debtors.push(x);
+    this.save();
+    return x;
+  },
+  updateDebtor(id, patch) {
+    const p = this.state.debtors.find(x => x.id === id);
+    if (p) Object.assign(p, patch);
+    if (this.state.debtors[0] && this.state.debtors[0].id === id && patch.name) {
+      this.state.settings.debtorName = patch.name;
+    }
+    this.save();
+  },
+  deleteDebtor(id) {
+    if (this.state.debtors.length <= 1) return false;
+    this.state.debtors = this.state.debtors.filter(p => p.id !== id);
+    const fallback = this.state.debtors[0].id;
+    this.state.debts.forEach(d => { if (d.debtorId === id) d.debtorId = fallback; });
+    this.save();
+    return true;
+  },
+  addDebt(d) {
+    const defId = (this.state.debtors && this.state.debtors[0]?.id) || 'priscila';
+    const x = { id: uid(), paid: 0, debtorId: defId, ...d };
+    this.state.debts.push(x);
+    this.save();
+    return x;
+  },
   updateDebt(id, patch) { const d = this.state.debts.find(x => x.id === id); if (d) Object.assign(d, patch); this.save(); },
   deleteDebt(id) { this.state.debts = this.state.debts.filter(x => x.id !== id); this.save(); },
   debtPending(d) { return Math.max(0, (Number(d.amount) || 0) - (Number(d.paid) || 0)); },
-  totalOwed() { return this.state.debts.reduce((s, d) => s + this.debtPending(d), 0); },
+  totalOwed(debtorId = null) {
+    return this.state.debts
+      .filter(d => !debtorId || d.debtorId === debtorId)
+      .reduce((s, d) => s + this.debtPending(d), 0);
+  },
 
   /* ---------- Préstamos bancarios ---------- */
   addLoan(l) { const x = { id: uid(), payments: [], ...l }; this.state.loans.push(x); this.save(); return x; },

@@ -94,6 +94,7 @@ const UI = {
   month: monthKey(),
   filters: { q: '', cat: '', method: '', quincena: '', onlyUnplanned: false },
   debtTab: 'pendientes',
+  debtPerson: 'priscila', // 'all' o el id de la persona
   lastCat: 'comida',
   lastMethod: 'tarjeta',
 };
@@ -178,13 +179,20 @@ function render() {
   document.documentElement.style.setProperty('--accent-soft', hexA(s.accent, 0.16));
 
   const [t, sub] = TITLES[UI.view];
-  $('#pageTitle').textContent = UI.view === 'cobros' ? `Cuentas de ${s.debtorName}` : t;
+  const debtors = Store.state.debtors || [];
+  if (UI.debtPerson !== 'all' && !debtors.some(p => p.id === UI.debtPerson)) {
+    UI.debtPerson = debtors[0]?.id || 'all';
+  }
+  const activeDebtor = UI.debtPerson === 'all' ? null : Store.debtor(UI.debtPerson);
+  $('#pageTitle').textContent = UI.view === 'cobros'
+    ? (activeDebtor ? `Cuentas de ${activeDebtor.name}` : 'Cuentas por cobrar')
+    : t;
   $('#pageSub').textContent = sub;
   $('#monthLabel').textContent = monthName(UI.month);
   $('.month-picker').classList.toggle('invisible', UI.view === 'ajustes' || UI.view === 'cobros' || UI.view === 'prestamos');
   $$('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.view === UI.view));
 
-  $('#navCobrosLabel').textContent = s.debtorName || 'Por cobrar';
+  $('#navCobrosLabel').textContent = debtors.length > 1 ? 'Por cobrar' : (debtors[0]?.name || 'Por cobrar');
   const owed = Store.totalOwed();
   const badge = $('#navCobrosBadge');
   badge.hidden = owed <= 0;
@@ -216,7 +224,11 @@ function viewResumen() {
   else if (c.income > 0 && c.projection > c.income) alerts.push(['warn', '⚠️', `A este ritmo cerrarás el mes gastando <b>${fmt(c.projection)}</b>, es decir <b>${fmt(c.projection - c.income)}</b> más de lo que ganas.`]);
   if (c.income > 0 && c.planned > c.income) alerts.push(['warn', '📋', `Tu presupuesto planificado (${fmt(c.planned)}) supera tus ingresos.`]);
   if (c.income > 0 && c.planned / c.income > 0.9 && c.planned <= c.income) alerts.push(['info', '🧮', `El presupuesto fijo ya consume el <b>${pct(c.planned, c.income)}%</b> de tus ingresos; queda muy poco margen para gastos variables.`]);
-  if (owed > 0) alerts.push(['info', '📦', `${esc(s.debtorName)} te debe <b>${fmt(owed)}</b>. <a href="#" data-action="go" data-view="cobros">Ver detalle</a>`]);
+  if (owed > 0) {
+    const byP = (Store.state.debtors || []).map(p => ({ p, v: Store.totalOwed(p.id) })).filter(x => x.v > 0);
+    const detail = byP.map(x => `${esc(x.p.name)} (${fmt(x.v)})`).join(' · ');
+    alerts.push(['info', '📦', `Te deben <b>${fmt(owed)}</b>: ${detail}. <a href="#" data-action="go" data-view="cobros">Ver detalle</a>`]);
+  }
 
   // Categorías (gasto real)
   const cats = Object.entries(c.byCat)
@@ -286,9 +298,9 @@ function viewResumen() {
       </div>
       ${cardKpi}
       <div class="kpi clickable" data-action="go" data-view="cobros">
-        <div class="kpi-label">📦 ${esc(s.debtorName)} te debe</div>
+        <div class="kpi-label">📦 Cuentas por cobrar</div>
         <div class="kpi-value ${owed > 0 ? 'txt-warn' : ''}">${fmt(owed)}</div>
-        <div class="kpi-foot">${Store.state.debts.filter(d => Store.debtPending(d) > 0).length} registros pendientes</div>
+        <div class="kpi-foot">${(Store.state.debtors || []).map(p => `${esc(p.name)}: ${fmt(Store.totalOwed(p.id))}`).join(' · ')}</div>
       </div>
     </div>
 
@@ -325,7 +337,7 @@ function viewResumen() {
           </div>
           <div class="insight">
             <div class="insight-ico">💳</div>
-            <div><b>Pagado con tarjeta</b><div class="muted">${cardDebts ? `+ ${fmt(cardDebts)} en pedidos de ${esc(s.debtorName)}` : 'Gastos propios con tarjeta de crédito'}</div></div>
+            <div><b>Pagado con tarjeta</b><div class="muted">${cardDebts ? `+ ${fmt(cardDebts)} en pedidos por cobrar` : 'Gastos propios con tarjeta de crédito'}</div></div>
             <div class="insight-val">${fmt(cardSpent)}</div>
           </div>
           <div class="insight">
@@ -737,7 +749,7 @@ function loanForm(l = {}) {
   </form>`;
 }
 
-/* ---------------- COBROS (PRISCILA) ---------------- */
+/* ---------------- COBROS (PRISCILA, RAÚL, ETC.) ---------------- */
 const DEBT_TYPES = {
   inicial: { label: 'Saldo anterior', icon: '🗂️' },
   amazon:  { label: 'Pedido Amazon', icon: '📦' },
@@ -753,31 +765,65 @@ function debtStatus(d) {
 }
 
 function viewCobros() {
-  const s = Store.state.settings;
-  const all = [...Store.state.debts].sort((a, b) => b.date.localeCompare(a.date));
+  const debtors = Store.state.debtors || [];
+  const isAll = UI.debtPerson === 'all';
+  const activePerson = isAll ? null : Store.debtor(UI.debtPerson);
+  const personName = activePerson ? activePerson.name : 'Todos';
+
+  const all = [...Store.state.debts]
+    .filter(d => isAll || d.debtorId === activePerson.id)
+    .sort((a, b) => b.date.localeCompare(a.date));
   const pending = all.filter(d => Store.debtPending(d) > 0);
   const list = UI.debtTab === 'pendientes' ? pending : UI.debtTab === 'pagados' ? all.filter(d => Store.debtPending(d) <= 0) : all;
-  const owed = Store.totalOwed();
+  const owed = Store.totalOwed(isAll ? null : activePerson.id);
   const owedCourier = sum(pending.filter(d => d.type === 'courier'), Store.debtPending.bind(Store));
   const owedAmazon = sum(pending.filter(d => d.type === 'amazon'), Store.debtPending.bind(Store));
   const totalPaid = sum(all, d => Math.min(Number(d.paid) || 0, Number(d.amount) || 0));
-  const amazonOrders = all.filter(d => d.type === 'amazon');
+  const amazonOrders = Store.state.debts.filter(d => d.type === 'amazon');
 
   return `
+    <div class="person-bar">
+      ${debtors.map(p => {
+        const pOwed = Store.totalOwed(p.id);
+        const active = !isAll && activePerson.id === p.id;
+        return `
+          <div class="person-pill ${active ? 'active' : ''}" style="--c:${esc(p.color || '#7c5cff')}" data-action="selectDebtor" data-id="${p.id}">
+            <span class="person-ico">${esc(p.icon || '👤')}</span>
+            <div class="person-info">
+              <div class="person-name">${esc(p.name)}</div>
+              <div class="person-amt ${pOwed > 0 ? 'txt-warn' : 'muted'}">${pOwed > 0 ? `Debe ${fmt(pOwed)}` : 'Al día ✓'}</div>
+            </div>
+            <button class="icon-btn sm person-edit" data-action="editDebtor" data-id="${p.id}" title="Editar persona">✏️</button>
+          </div>`;
+      }).join('')}
+      <div class="person-pill ${isAll ? 'active' : ''}" style="--c:var(--accent)" data-action="selectDebtor" data-id="all">
+        <span class="person-ico">👥</span>
+        <div class="person-info">
+          <div class="person-name">Todos</div>
+          <div class="person-amt">${fmt(Store.totalOwed())}</div>
+        </div>
+      </div>
+      <button class="btn btn-sm" data-action="addDebtor">＋ Agregar persona</button>
+    </div>
+
     <div class="kpis">
-      <div class="kpi highlight"><div class="kpi-label">💰 ${esc(s.debtorName)} te debe</div><div class="kpi-value">${fmt(owed)}</div><div class="kpi-foot">${pending.length} registros pendientes</div></div>
+      <div class="kpi highlight" style="${activePerson ? `background:linear-gradient(135deg, ${esc(activePerson.color)}, color-mix(in srgb, ${esc(activePerson.color)} 60%, #000))` : ''}">
+        <div class="kpi-label">💰 ${isAll ? 'Total que te deben' : `${esc(personName)} te debe`}</div>
+        <div class="kpi-value">${fmt(owed)}</div>
+        <div class="kpi-foot">${pending.length} registros pendientes</div>
+      </div>
       <div class="kpi"><div class="kpi-label">📦 Pedidos pendientes</div><div class="kpi-value">${fmt(owedAmazon)}</div></div>
       <div class="kpi"><div class="kpi-label">🚚 Courier pendiente</div><div class="kpi-value">${fmt(owedCourier)}</div></div>
-      <div class="kpi"><div class="kpi-label">✅ Ya te pagó (total)</div><div class="kpi-value txt-ok">${fmt(totalPaid)}</div></div>
+      <div class="kpi"><div class="kpi-label">✅ Ya pagado (${isAll ? 'todos' : esc(personName)})</div><div class="kpi-value txt-ok">${fmt(totalPaid)}</div></div>
     </div>
 
     <div class="row-gap">
-      <button class="btn btn-primary" data-action="addDebt" data-type="amazon">📦 Nuevo pedido</button>
+      <button class="btn btn-primary" data-action="addDebt" data-type="amazon">📦 Nuevo pedido${activePerson ? ` (${esc(personName)})` : ''}</button>
       <button class="btn" data-action="addDebt" data-type="courier">🚚 Agregar courier</button>
       <button class="btn" data-action="addDebt" data-type="otro">🧾 Otro</button>
       <button class="btn btn-ghost" data-action="addDebt" data-type="inicial" title="Lo que ya te debía antes de empezar a usar la app">🗂️ Saldo inicial</button>
       <span class="spacer"></span>
-      <button class="btn btn-ok" data-action="receivePayment" ${owed <= 0 ? 'disabled' : ''}>💵 ${esc(s.debtorName)} me pagó…</button>
+      <button class="btn btn-ok" data-action="receivePayment" ${owed <= 0 ? 'disabled' : ''}>💵 ${isAll ? 'Registrar abono…' : `${esc(personName)} me pagó…`}</button>
       <button class="btn btn-ghost" data-action="copyDebtSummary" ${owed <= 0 ? 'disabled' : ''}>📋 Copiar resumen</button>
     </div>
 
@@ -789,14 +835,16 @@ function viewCobros() {
     <div class="card">
       ${list.length ? `
       <div class="table-wrap"><table class="table">
-        <thead><tr><th>Fecha</th><th>Tipo</th><th>Descripción</th><th class="num">Monto</th><th class="num">Abonado</th><th class="num">Debe</th><th>Estado</th><th></th></tr></thead>
+        <thead><tr><th>Fecha</th>${isAll ? '<th>Persona</th>' : ''}<th>Tipo</th><th>Descripción</th><th class="num">Monto</th><th class="num">Abonado</th><th class="num">Debe</th><th>Estado</th><th></th></tr></thead>
         <tbody>
           ${list.map(d => {
             const t = DEBT_TYPES[d.type] || DEBT_TYPES.otro;
             const [st, stl] = debtStatus(d);
             const rel = d.relatedId ? amazonOrders.find(o => o.id === d.relatedId) : null;
+            const p = Store.debtor(d.debtorId);
             return `<tr class="${st === 'pagado' ? 'is-paid' : ''}">
               <td>${shortDate(d.date)}</td>
+              ${isAll ? `<td><span class="chip" style="--c:${esc(p.color)}">${esc(p.icon)} ${esc(p.name)}</span></td>` : ''}
               <td><span class="type-pill type-${d.type}">${t.icon} ${t.label}</span></td>
               <td>${esc(d.desc || '—')}${rel ? `<div class="muted small">↳ de: ${esc(rel.desc || shortDate(rel.date))}</div>` : ''}${d.paidDate && st === 'pagado' ? `<div class="muted small">Pagado el ${shortDate(d.paidDate)}</div>` : ''}</td>
               <td class="num">${fmt(d.amount)}</td>
@@ -810,24 +858,51 @@ function viewCobros() {
             </tr>`;
           }).join('')}
         </tbody>
-      </table></div>` : empty(UI.debtTab === 'pendientes' ? `${s.debtorName} no te debe nada 🎉` : 'Sin registros', 'Cuando hagas un pedido por ella, agrégalo aquí con su fecha y monto.',
-        !all.length ? `<div class="row-gap center"><button class="btn btn-primary" data-action="addDebt" data-type="inicial">🗂️ Registrar lo que ya me debe</button></div>` : '')}
+      </table></div>` : empty(UI.debtTab === 'pendientes' ? `${personName} no te debe nada 🎉` : 'Sin registros', `Cuando hagas un pedido para ${isAll ? 'alguien' : personName}, agrégalo aquí con su fecha y monto.`,
+        !all.length ? `<div class="row-gap center"><button class="btn btn-primary" data-action="addDebt" data-type="amazon">📦 Registrar pedido</button><button class="btn" data-action="addDebt" data-type="inicial">🗂️ Saldo inicial</button></div>` : '')}
     </div>
-    <div class="tip">💡 Con <b>“${esc(s.debtorName)} me pagó…”</b> ingresas lo que te dio y se aplica automáticamente a los pendientes más antiguos. <b>“Copiar resumen”</b> te da un texto listo para enviarle por WhatsApp.</div>`;
+    <div class="tip">💡 Puedes cambiar entre <b>Priscila</b>, <b>Raúl</b> o agregar más personas con <b>“＋ Agregar persona”</b>. Cada quien tiene su cuenta y su resumen de WhatsApp por separado.</div>`;
+}
+
+function debtorForm(p = {}) {
+  const canDelete = p.id && (Store.state.debtors || []).length > 1;
+  return `<form id="modalForm" class="form">
+    <label>Nombre de la persona<input name="name" required value="${esc(p.name || '')}" placeholder="Ej. Raúl, Priscila, Mamá…" autofocus></label>
+    <div class="form-row">
+      <label>Ícono / Emoji<input name="icon" value="${esc(p.icon || '👤')}" maxlength="4"></label>
+      <label>Color<input name="color" type="color" value="${esc(p.color || '#3fa7ff')}" style="width:100%;height:40px"></label>
+    </div>
+    <div class="form-actions">
+      ${canDelete ? `<button type="button" class="btn btn-ghost danger" data-action="delDebtor" data-id="${p.id}" style="margin-right:auto">🗑️ Eliminar</button>` : ''}
+      <button type="button" class="btn" data-action="closeModal">Cancelar</button>
+      <button class="btn btn-primary">Guardar</button>
+    </div>
+  </form>`;
 }
 
 function debtForm(d = {}) {
-  const orders = Store.state.debts.filter(x => x.type === 'amazon' && x.id !== d.id).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 40);
+  const debtors = Store.state.debtors || [];
+  const defaultDebtorId = d.debtorId || (UI.debtPerson !== 'all' ? UI.debtPerson : (debtors[0]?.id || 'priscila'));
+  const orders = Store.state.debts
+    .filter(x => x.type === 'amazon' && x.id !== d.id && (!defaultDebtorId || x.debtorId === defaultDebtorId))
+    .sort((a, b) => b.date.localeCompare(a.date)).slice(0, 40);
   const type = d.type || 'amazon';
+  const selectedPerson = Store.debtor(defaultDebtorId);
   return `<form id="modalForm" class="form">
     <div class="form-row">
+      <label>Persona
+        <select name="debtorId">
+          ${debtors.map(p => `<option value="${p.id}" ${p.id === defaultDebtorId ? 'selected' : ''}>${esc(p.icon)} ${esc(p.name)}</option>`).join('')}
+        </select>
+      </label>
       <label>Tipo<select name="type" data-change="debtTypeChange">
         ${Object.entries(DEBT_TYPES).map(([k, t]) => `<option value="${k}" ${k === type ? 'selected' : ''}>${t.icon} ${t.label}</option>`).join('')}
       </select></label>
-      <label>Fecha<input name="date" type="date" required value="${d.date || todayISO()}"></label>
     </div>
-    ${type === 'inicial' && !d.id ? `<div class="tip">🗂️ Usa esto para anotar lo que ${esc(Store.state.settings.debtorName)} ya te debía antes de empezar a usar la app. Puedes poner un solo monto total o varios registros con su detalle.</div>` : ''}
-    <label>Descripción / a qué corresponde<input name="desc" value="${esc(d.desc || (type === 'inicial' && !d.id ? 'Saldo pendiente anterior' : ''))}" placeholder="${type === 'courier' ? 'Ej. Courier paquete #1234' : type === 'inicial' ? 'Ej. Pedidos de agosto y septiembre' : 'Ej. Audífonos, ropa de niños…'}" autofocus></label>
+    ${type === 'inicial' && !d.id ? `<div class="tip">🗂️ Usa esto para anotar lo que ${esc(selectedPerson.name)} ya te debía antes de empezar a usar la app.</div>` : ''}
+    <div class="form-row">
+      <label style="grid-column:span 2">Descripción / a qué corresponde<input name="desc" value="${esc(d.desc || (type === 'inicial' && !d.id ? 'Saldo pendiente anterior' : ''))}" placeholder="${type === 'courier' ? 'Ej. Courier paquete #1234' : type === 'inicial' ? 'Ej. Pedidos anteriores' : 'Ej. Audífonos, reloj, ropa…'}" autofocus></label>
+    </div>
     <label class="related" ${type === 'courier' ? '' : 'hidden'}>Corresponde al pedido (opcional)
       <select name="relatedId"><option value="">— Ninguno —</option>
         ${orders.map(o => `<option value="${o.id}" ${o.id === d.relatedId ? 'selected' : ''}>${shortDate(o.date)} · ${esc(o.desc || 'Pedido')} · ${fmt(o.amount)}</option>`).join('')}
@@ -836,6 +911,7 @@ function debtForm(d = {}) {
       <label>Monto<input name="amount" type="number" step="0.01" min="0" required value="${d.amount ?? ''}"></label>
       <label>Ya abonado<input name="paid" type="number" step="0.01" min="0" value="${d.paid ?? 0}"></label>
     </div>
+    <label>Fecha<input name="date" type="date" required value="${d.date || todayISO()}"></label>
     <div class="form-actions"><button type="button" class="btn" data-action="closeModal">Cancelar</button><button class="btn btn-primary">Guardar</button></div>
   </form>`;
 }
@@ -981,15 +1057,17 @@ function openExpenseModal(e) {
 
 function openDebtModal(d, type) {
   const isNew = !d;
-  openModal(isNew ? `Nuevo registro · ${Store.state.settings.debtorName}` : 'Editar registro', debtForm(d || { type }), data => {
+  const activePerson = UI.debtPerson === 'all' ? Store.debtor() : Store.debtor(UI.debtPerson);
+  openModal(isNew ? `Nuevo registro · ${activePerson.name}` : 'Editar registro', debtForm(d || { type }), data => {
     const payload = {
+      debtorId: data.debtorId || activePerson.id,
       type: data.type, date: data.date, desc: data.desc, amount: Number(data.amount) || 0,
       paid: Math.min(Number(data.paid) || 0, Number(data.amount) || 0),
       relatedId: data.type === 'courier' ? (data.relatedId || '') : '',
     };
     if (payload.paid >= payload.amount && payload.amount > 0) payload.paidDate = (d && d.paidDate) || todayISO();
     else payload.paidDate = '';
-    if (isNew) { Store.addDebt(payload); toast('Registro agregado'); }
+    if (isNew) { Store.addDebt(payload); UI.debtPerson = payload.debtorId; toast('Registro agregado'); }
     else { Store.updateDebt(d.id, payload); toast('Registro actualizado'); }
   });
 }
@@ -1122,6 +1200,33 @@ const actions = {
   },
 
   /* Cobros */
+  selectDebtor: el => {
+    if (el.target?.closest?.('.person-edit')) return;
+    UI.debtPerson = el.dataset.id;
+    render();
+  },
+  addDebtor: () => openModal('Agregar persona', debtorForm(), d => {
+    const p = Store.addDebtor({ name: d.name, icon: d.icon || '👤', color: d.color || '#3fa7ff' });
+    UI.debtPerson = p.id;
+    toast(`${p.name} agregado`);
+  }),
+  editDebtor: (el, ev) => {
+    ev.stopPropagation();
+    const p = Store.debtor(el.dataset.id);
+    openModal(`Editar · ${p.name}`, debtorForm(p), d => {
+      Store.updateDebtor(p.id, { name: d.name, icon: d.icon || p.icon, color: d.color || p.color });
+      toast('Persona actualizada');
+    });
+  },
+  delDebtor: el => {
+    const p = Store.debtor(el.dataset.id);
+    if (!confirm(`¿Eliminar a ${p.name}? Si tenía registros, pasarán a la primera persona de la lista.`)) return;
+    closeModal();
+    withUndo(`${p.name} eliminado`, () => {
+      Store.deleteDebtor(p.id);
+      UI.debtPerson = Store.state.debtors[0]?.id || 'all';
+    });
+  },
   debtTab: el => { UI.debtTab = el.dataset.tab; render(); },
   addDebt: el => openDebtModal(null, el.dataset.type),
   editDebt: el => openDebtModal(Store.state.debts.find(d => d.id === el.dataset.id)),
@@ -1134,16 +1239,29 @@ const actions = {
     render();
   },
   receivePayment: () => {
-    const name = Store.state.settings.debtorName;
-    const owed = Store.totalOwed();
-    openModal(`${name} me pagó`, `<form id="modalForm" class="form">
-      <p class="muted">Te debe <b>${fmt(owed)}</b>. El pago se aplicará a los registros pendientes más antiguos primero.</p>
-      <div class="big-amount"><span>${esc(Store.state.settings.currency)}</span><input name="amount" type="number" step="0.01" min="0.01" max="${owed}" value="${owed}" required autofocus></div>
+    const debtors = Store.state.debtors || [];
+    const targetPerson = UI.debtPerson === 'all'
+      ? (debtors.find(p => Store.totalOwed(p.id) > 0) || debtors[0])
+      : Store.debtor(UI.debtPerson);
+    const owed = Store.totalOwed(targetPerson.id);
+    openModal(`${targetPerson.name} me pagó`, `<form id="modalForm" class="form">
+      ${UI.debtPerson === 'all' ? `
+        <label>¿Quién te pagó?
+          <select name="debtorId">
+            ${debtors.map(p => `<option value="${p.id}" ${p.id === targetPerson.id ? 'selected' : ''}>${esc(p.icon)} ${esc(p.name)} (debe ${fmt(Store.totalOwed(p.id))})</option>`).join('')}
+          </select>
+        </label>
+      ` : `<input type="hidden" name="debtorId" value="${targetPerson.id}">`}
+      <p class="muted">Te debe <b>${fmt(owed)}</b>. El pago se aplicará a sus registros pendientes más antiguos primero.</p>
+      <div class="big-amount"><span>${esc(Store.state.settings.currency)}</span><input name="amount" type="number" step="0.01" min="0.01" value="${owed}" required autofocus></div>
       <label>Fecha<input name="date" type="date" value="${todayISO()}"></label>
       <div class="form-actions"><button type="button" class="btn" data-action="closeModal">Cancelar</button><button class="btn btn-ok">Aplicar pago</button></div>
     </form>`, d => {
       let left = Number(d.amount) || 0;
-      const pend = Store.state.debts.filter(x => Store.debtPending(x) > 0).sort((a, b) => a.date.localeCompare(b.date));
+      const pid = d.debtorId || targetPerson.id;
+      const pend = Store.state.debts
+        .filter(x => x.debtorId === pid && Store.debtPending(x) > 0)
+        .sort((a, b) => a.date.localeCompare(b.date));
       for (const x of pend) {
         if (left <= 0) break;
         const take = Math.min(left, Store.debtPending(x));
@@ -1152,14 +1270,22 @@ const actions = {
         if (Store.debtPending(x) <= 0) x.paidDate = d.date;
       }
       Store.save();
-      toast(`Pago de ${fmt(d.amount)} aplicado`);
+      toast(`Pago de ${fmt(d.amount)} aplicado a ${Store.debtor(pid).name}`);
     });
   },
   copyDebtSummary: () => {
-    const s = Store.state.settings;
-    const pend = Store.state.debts.filter(x => Store.debtPending(x) > 0).sort((a, b) => a.date.localeCompare(b.date));
-    const lines = pend.map(x => `• ${shortDate(x.date)} – ${(DEBT_TYPES[x.type] || DEBT_TYPES.otro).label}${x.desc ? `: ${x.desc}` : ''} → ${fmt(Store.debtPending(x))}`);
-    const text = `Hola ${s.debtorName} 👋, este es el resumen de lo pendiente:\n\n${lines.join('\n')}\n\n*Total: ${fmt(Store.totalOwed())}*`;
+    const isAll = UI.debtPerson === 'all';
+    const activePerson = isAll ? null : Store.debtor(UI.debtPerson);
+    const pend = Store.state.debts
+      .filter(x => (isAll || x.debtorId === activePerson.id) && Store.debtPending(x) > 0)
+      .sort((a, b) => a.date.localeCompare(b.date));
+    const lines = pend.map(x => {
+      const prefix = isAll ? `[${Store.debtor(x.debtorId).name}] ` : '';
+      return `• ${prefix}${shortDate(x.date)} – ${(DEBT_TYPES[x.type] || DEBT_TYPES.otro).label}${x.desc ? `: ${x.desc}` : ''} → ${fmt(Store.debtPending(x))}`;
+    });
+    const greeting = activePerson ? `Hola ${activePerson.name} 👋, este es el resumen de lo pendiente:` : `📋 Resumen de cuentas por cobrar:`;
+    const total = Store.totalOwed(isAll ? null : activePerson.id);
+    const text = `${greeting}\n\n${lines.join('\n')}\n\n*Total: ${fmt(total)}*`;
     navigator.clipboard.writeText(text).then(() => toast('Resumen copiado al portapapeles 📋'), () => {
       openModal('Resumen', `<textarea class="summary-text" readonly>${esc(text)}</textarea>`, null);
     });

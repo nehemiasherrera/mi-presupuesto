@@ -251,6 +251,27 @@ input[type="color"] { padding: 2px; width: 38px; height: 34px; cursor: pointer; 
 .toggle input:checked + span::after { left: 18px; }
 
 /* Cobros */
+.person-bar {
+  display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 16px;
+}
+.person-pill {
+  display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+  border-radius: 14px; border: 1px solid var(--border); background: var(--panel);
+  cursor: pointer; transition: .15s; min-width: 155px; box-shadow: var(--shadow);
+}
+.person-pill:hover { border-color: var(--c); transform: translateY(-1px); }
+.person-pill.active {
+  background: color-mix(in srgb, var(--c) 16%, var(--panel-solid));
+  border-color: var(--c);
+  box-shadow: 0 6px 20px color-mix(in srgb, var(--c) 22%, transparent);
+}
+.person-ico {
+  width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center;
+  font-size: 18px; background: color-mix(in srgb, var(--c) 20%, transparent);
+}
+.person-info { flex: 1; min-width: 0; }
+.person-name { font-weight: 700; font-size: 14px; line-height: 1.2; }
+.person-amt { font-size: 12px; font-weight: 600; }
 .loan-balance-box {
   display: flex; justify-content: space-between; align-items: flex-end; gap: 12px;
   padding: 12px 14px; border-radius: 14px; background: var(--input); border: 1px solid var(--border);
