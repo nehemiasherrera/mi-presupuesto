@@ -11,9 +11,10 @@ const Cloud = {
   unsubAccess: null,
   unsubActivity: null,
   pushTimer: null,
-  status: 'local', // 'local' | 'connecting' | 'synced' | 'saving' | 'error'
+  pendingPush: false,
+  status: 'local', // 'local' | 'connecting' | 'synced' | 'saving' | 'offline' | 'error'
   extraEmails: [], // correos adicionales autorizados desde Ajustes
-  activityUsers: {}, // { [email]: { name, email, photo, lastSeenAt } }
+  activityUsers: {}, // { [email]: { name, email, lastSeenAt } }
   lastUpdatedBy: '',
 
   isConfigured() {
@@ -38,6 +39,22 @@ const Cloud = {
   },
 
   init() {
+    window.addEventListener('offline', () => {
+      if (this.enabled) {
+        this.status = 'offline';
+        this.updateBadge();
+      }
+    });
+    window.addEventListener('online', () => {
+      if (this.enabled && this.user) {
+        this.status = 'synced';
+        this.updateBadge();
+        if (this.pendingPush && Store.state) {
+          this.pushImmediate(Store.state);
+        }
+      }
+    });
+
     // Si se abre como archivo local (file://), Google Auth no permite popups; usar modo local sin bloqueo
     if (location.protocol === 'file:' || !this.isConfigured() || typeof firebase === 'undefined') {
       this.status = 'local';
@@ -102,7 +119,6 @@ const Cloud = {
       return;
     }
 
-    // Verificamos si es propietario o si tiene permiso en Firestore (household/access)
     const email = (user.email || '').toLowerCase().trim();
     let allowed = this.isOwner(email);
 
@@ -129,7 +145,6 @@ const Cloud = {
       return;
     }
 
-    // Usuario autorizado
     this.user = user;
     if (gate) gate.hidden = true;
     this.startSync();
@@ -162,7 +177,7 @@ const Cloud = {
         },
       }, { merge: true });
     } catch (e) {
-      // Si las reglas de Firestore aún no tienen household/activity publicado, no interrumpir la app
+      // Ignorar si las reglas aún no tienen household/activity publicado
     }
   },
 
@@ -173,10 +188,8 @@ const Cloud = {
     this.status = 'connecting';
     this.updateBadge();
 
-    // Registrar que este usuario acaba de entrar
     this.recordPresence();
 
-    // Escuchar registro de entradas/actividad de usuarios
     this.unsubActivity = this.activityRef().onSnapshot(snap => {
       if (snap.exists && snap.data()?.users) {
         this.activityUsers = snap.data().users;
@@ -184,14 +197,12 @@ const Cloud = {
       }
     }, () => {});
 
-    // Escuchar lista de correos invitados
     this.unsubAccess = this.accessRef().onSnapshot(snap => {
       if (snap.exists && Array.isArray(snap.data()?.emails)) {
         this.extraEmails = snap.data().emails.map(e => String(e).toLowerCase().trim()).filter(Boolean);
       } else {
         this.extraEmails = [];
       }
-      // Si el usuario actual era invitado y fue revocado en vivo, cerrar su sesión
       if (this.user && !this.isOwner(this.user.email) && !this.extraEmails.includes(this.user.email.toLowerCase().trim())) {
         this.signOut();
         return;
@@ -206,29 +217,28 @@ const Cloud = {
         this.lastUpdatedBy = data.updatedBy || '';
         const remote = data.state;
         if (remote) {
-          // Si este navegador ya tenía préstamos cargados localmente y en la nube aún no estaban, conservarlos y subirlos
+          const localUpdatedAt = Number(Store.state?.updatedAt) || 0;
+          const remoteUpdatedAt = Number(remote.updatedAt) || 0;
           const localLoans = Store.state?.loans || [];
           const remoteLoans = remote.loans || [];
-          const needPushLoans = firstSnapshot && localLoans.length > 0 && remoteLoans.length === 0;
-          const localUpdated = Store.state?.updatedAt || 0;
-          const remoteUpdated = remote.updatedAt || 0;
-          if (firstSnapshot || remoteUpdated > localUpdated) {
-            if (needPushLoans) remote.loans = localLoans;
-            Store.applyRemote(remote);
-            if (typeof render === 'function') render();
-            if (needPushLoans) this.pushImmediate(Store.state);
-          }
+          const needPushBack = firstSnapshot && (
+            (localLoans.length > 0 && remoteLoans.length === 0) ||
+            (localUpdatedAt > remoteUpdatedAt)
+          );
+          Store.applyRemote(remote);
+          if (typeof render === 'function') render();
+          if (needPushBack) this.pushImmediate(Store.state);
         }
       } else if (firstSnapshot && Store.hasMeaningfulData()) {
         this.pushImmediate(Store.state);
         if (typeof toast === 'function') toast('☁️ Tus datos locales se subieron a la nube');
       }
       firstSnapshot = false;
-      this.status = 'synced';
+      this.status = navigator.onLine === false ? 'offline' : 'synced';
       this.updateBadge();
     }, err => {
       console.error('Error sincronizando con Firestore:', err);
-      this.status = 'error';
+      this.status = navigator.onLine === false ? 'offline' : 'error';
       this.updateBadge();
     });
   },
@@ -238,6 +248,7 @@ const Cloud = {
     const email = String(rawEmail || '').toLowerCase().trim();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Ingresa un correo electrónico válido.');
     if (this.owners().includes(email)) throw new Error('Ese correo ya es administrador fijo.');
+    if (this.extraEmails.length >= 25) throw new Error('Se alcanzó el límite máximo de 25 invitados.');
     const next = [...new Set([...this.extraEmails, email])];
     await this.accessRef().set({
       emails: next,
@@ -259,6 +270,12 @@ const Cloud = {
 
   push(state) {
     if (!this.enabled || !this.user || !this.db) return;
+    this.pendingPush = true;
+    if (navigator.onLine === false) {
+      this.status = 'offline';
+      this.updateBadge();
+      return;
+    }
     this.status = 'saving';
     this.updateBadge();
     clearTimeout(this.pushTimer);
@@ -267,17 +284,25 @@ const Cloud = {
 
   async pushImmediate(state) {
     if (!this.enabled || !this.user || !this.db) return;
+    if (navigator.onLine === false) {
+      this.pendingPush = true;
+      this.status = 'offline';
+      this.updateBadge();
+      return;
+    }
     try {
       await this.docRef().set({
         state: JSON.parse(JSON.stringify(state)),
         updatedBy: this.user.email,
         updatedAtServer: firebase.firestore.FieldValue.serverTimestamp(),
       });
+      this.pendingPush = false;
       this.recordPresence();
       this.status = 'synced';
       this.updateBadge();
     } catch (e) {
       console.error('Error guardando en la nube:', e);
+      this.pendingPush = true;
       this.status = 'error';
       this.updateBadge();
     }
@@ -291,7 +316,8 @@ const Cloud = {
       connecting: '☁️ Conectando…',
       synced: `☁️ Sincronizado · ${this.user ? this.user.email.split('@')[0] : ''}`,
       saving: '☁️ Guardando…',
-      error: '⚠️ Error de conexión',
+      offline: '📡 Sin internet · Guardado en equipo',
+      error: '⚠️ Error de conexión (reintentando)',
     };
     sub.textContent = labels[this.status] || 'Control de finanzas';
   },

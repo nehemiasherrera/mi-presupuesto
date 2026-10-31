@@ -7,9 +7,10 @@
   <link rel="icon" type="image/svg+xml" href="favicon.svg" />
   <link rel="apple-touch-icon" href="favicon.svg" />
   <meta name="theme-color" content="#0d0f17" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://www.gstatic.com https://apis.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' https://*.googleapis.com https://*.firebaseio.com https://*.firebaseapp.com wss://*.firebaseio.com; frame-src https://*.firebaseapp.com https://accounts.google.com;" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/styles.css?v=5" />
+  <link rel="stylesheet" href="css/styles.css?v=6" />
 </head>
 <body>
   <div class="app">
@@ -44,9 +45,9 @@
           <div class="page-sub" id="pageSub"></div>
         </div>
         <div class="month-picker">
-          <button class="icon-btn" id="prevMonth" title="Mes anterior">‹</button>
-          <button class="month-label" id="monthLabel" title="Ir al mes actual">—</button>
-          <button class="icon-btn" id="nextMonth" title="Mes siguiente">›</button>
+          <button class="icon-btn" id="prevMonth" title="Mes anterior" aria-label="Mes anterior">‹</button>
+          <button class="month-label" id="monthLabel" title="Ir al mes actual" aria-label="Ir al mes actual">—</button>
+          <button class="icon-btn" id="nextMonth" title="Mes siguiente" aria-label="Mes siguiente">›</button>
         </div>
       </header>
       <section id="view" class="view"></section>
@@ -54,20 +55,20 @@
   </div>
 
   <!-- Botón flotante (móvil) -->
-  <button class="fab" id="fab" title="Registrar gasto">＋</button>
+  <button class="fab" id="fab" title="Registrar gasto" aria-label="Registrar gasto">＋</button>
 
   <!-- Modal -->
   <div class="modal-backdrop" id="modalBackdrop" hidden>
-    <div class="modal" role="dialog" aria-modal="true">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
       <div class="modal-head">
         <h3 id="modalTitle">—</h3>
-        <button class="icon-btn" id="modalClose">✕</button>
+        <button class="icon-btn" id="modalClose" aria-label="Cerrar ventana">✕</button>
       </div>
       <div class="modal-body" id="modalBody"></div>
     </div>
   </div>
 
-  <div class="toasts" id="toasts"></div>
+  <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
 
   <!-- Pantalla de acceso privado (solo se activa cuando Firebase está configurado) -->
   <div class="auth-gate" id="authGate" hidden>
@@ -85,10 +86,10 @@
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-  <script src="js/firebase-config.js?v=5"></script>
-  <script src="js/cloud.js?v=5"></script>
-  <script src="js/store.js?v=5"></script>
-  <script src="js/charts.js?v=5"></script>
-  <script src="js/app.js?v=5"></script>
+  <script src="js/firebase-config.js?v=6"></script>
+  <script src="js/cloud.js?v=6"></script>
+  <script src="js/store.js?v=6"></script>
+  <script src="js/charts.js?v=6"></script>
+  <script src="js/app.js?v=6"></script>
 </body>
 </html>

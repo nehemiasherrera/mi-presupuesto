@@ -10,13 +10,13 @@ function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 function fmt(n, withSign = false) {
-  const v = Number(n) || 0;
+  const v = money(n);
   const s = Math.abs(v).toLocaleString('es-DO', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
   const cur = Store.state.settings.currency || '';
   return `${v < 0 ? '-' : (withSign && v > 0 ? '+' : '')}${cur} ${s}`;
 }
 const pct = (a, b) => (b > 0 ? Math.round((a / b) * 100) : 0);
-const sum = (arr, f = x => x) => arr.reduce((s, x) => s + (Number(f(x)) || 0), 0);
+const sum = (arr, f = x => x) => money(arr.reduce((s, x) => s + (Number(f(x)) || 0), 0));
 const MONTHS = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
 function monthName(key) { const [y, m] = key.split('-').map(Number); return `${MONTHS[m - 1]} ${y}`; }
 function daysIn(key) { const [y, m] = key.split('-').map(Number); return new Date(y, m, 0).getDate(); }
@@ -37,7 +37,8 @@ function lastSeenLabel(email) {
   return `✅ Última entrada: ${timeStr}`;
 }
 function hexA(hex, a) {
-  const h = hex.replace('#', '');
+  const safe = safeColor(hex, '#7c5cff');
+  const h = safe.replace('#', '');
   const n = parseInt(h.length === 3 ? h.split('').map(c => c + c).join('') : h, 16);
   return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
 }
@@ -93,6 +94,7 @@ const UI = {
   view: 'resumen',
   month: monthKey(),
   filters: { q: '', cat: '', method: '', quincena: '', onlyUnplanned: false },
+  expenseLimit: 50,
   debtTab: 'pendientes',
   debtPerson: 'priscila', // 'all' o el id de la persona
   lastCat: 'comida',
@@ -141,8 +143,8 @@ function calc(key) {
 }
 
 /* ---------------- Opciones de selects ---------------- */
-const catOptions = sel => Store.state.categories.map(c => `<option value="${c.id}" ${c.id === sel ? 'selected' : ''}>${c.icon} ${esc(c.name)}</option>`).join('');
-const methodOptions = sel => Store.state.methods.map(m => `<option value="${m.id}" ${m.id === sel ? 'selected' : ''}>${m.icon} ${esc(m.name)}</option>`).join('');
+const catOptions = sel => Store.state.categories.map(c => `<option value="${esc(c.id)}" ${c.id === sel ? 'selected' : ''}>${esc(c.icon)} ${esc(c.name)}</option>`).join('');
+const methodOptions = sel => Store.state.methods.map(m => `<option value="${esc(m.id)}" ${m.id === sel ? 'selected' : ''}>${esc(m.icon)} ${esc(m.name)}</option>`).join('');
 
 /* =========================================================
    VISTAS
@@ -245,13 +247,14 @@ function viewResumen() {
     .map(x => {
       const over = x.spent > x.planned;
       const p = x.planned > 0 ? Math.min(100, (x.spent / x.planned) * 100) : 100;
+      const col = safeColor(x.cat.color, '#7c5cff');
       return `
         <div class="pv">
           <div class="pv-head">
-            <span>${x.cat.icon} ${esc(x.cat.name)}</span>
+            <span>${esc(x.cat.icon)} ${esc(x.cat.name)}</span>
             <span class="${over ? 'txt-danger' : 'muted'}">${fmt(x.spent)} <small>/ ${x.planned ? fmt(x.planned) : 'sin plan'}</small></span>
           </div>
-          <div class="progress"><div class="progress-bar ${over ? 'danger' : ''}" style="width:${p}%;${over ? '' : `background:${x.cat.color}`}"></div></div>
+          <div class="progress"><div class="progress-bar ${over ? 'danger' : ''}" style="width:${p}%;${over ? '' : `background:${col}`}"></div></div>
         </div>`;
     }).join('') || empty('Sin datos aún', 'Agrega partidas al presupuesto o registra gastos.');
 
@@ -297,7 +300,7 @@ function viewResumen() {
         <div class="kpi-foot">Ingresos − gastado real</div>
       </div>
       ${cardKpi}
-      <div class="kpi clickable" data-action="go" data-view="cobros">
+      <div class="kpi clickable" role="button" tabindex="0" data-action="go" data-view="cobros">
         <div class="kpi-label">📦 Cuentas por cobrar</div>
         <div class="kpi-value ${owed > 0 ? 'txt-warn' : ''}">${fmt(owed)}</div>
         <div class="kpi-foot">${(Store.state.debtors || []).map(p => `${esc(p.name)}: ${fmt(Store.totalOwed(p.id))}`).join(' · ')}</div>
@@ -313,8 +316,8 @@ function viewResumen() {
             <div class="legend">
               ${cats.slice(0, 8).map(x => `
                 <div class="legend-row">
-                  <span class="dot" style="background:${x.cat.color}"></span>
-                  <span class="legend-name">${x.cat.icon} ${esc(x.cat.name)}</span>
+                  <span class="dot" style="background:${safeColor(x.cat.color)}"></span>
+                  <span class="legend-name">${esc(x.cat.icon)} ${esc(x.cat.name)}</span>
                   <span class="legend-val">${fmt(x.spent)}</span>
                   <span class="legend-pct">${pct(x.spent, c.spent)}%</span>
                 </div>`).join('')}
@@ -414,15 +417,15 @@ function viewPresupuesto() {
             const cat = Store.cat(i.categoryId), m = Store.method(i.methodId);
             return `
             <div class="row ${i.paid ? 'is-paid' : ''}">
-              <button class="check ${i.paid ? 'on' : ''}" data-action="togglePaid" data-id="${i.id}" title="${i.paid ? 'Marcar como no pagado' : 'Marcar como pagado (se registra como gasto)'}">${i.paid ? '✓' : ''}</button>
+              <button class="check ${i.paid ? 'on' : ''}" data-action="togglePaid" data-id="${i.id}" title="${i.paid ? 'Marcar como no pagado' : 'Marcar como pagado (se registra como gasto)'}" aria-label="${i.paid ? 'Marcar como no pagado' : 'Marcar como pagado'}">${i.paid ? '✓' : ''}</button>
               <div class="row-main">
                 <div class="row-title">${esc(i.name)}</div>
-                <div class="row-meta"><span class="chip" style="--c:${cat.color}">${cat.icon} ${esc(cat.name)}</span> ${m.icon} ${esc(m.name)}</div>
+                <div class="row-meta"><span class="chip" style="--c:${safeColor(cat.color)}">${esc(cat.icon)} ${esc(cat.name)}</span> ${esc(m.icon)} ${esc(m.name)}</div>
               </div>
               <div class="row-amt">${fmt(i.amount)}</div>
               <div class="row-actions">
-                <button class="icon-btn sm" data-action="editItem" data-id="${i.id}" title="Editar">✏️</button>
-                <button class="icon-btn sm" data-action="delItem" data-id="${i.id}" title="Eliminar">🗑️</button>
+                <button class="icon-btn sm" data-action="editItem" data-id="${i.id}" title="Editar" aria-label="Editar">✏️</button>
+                <button class="icon-btn sm" data-action="delItem" data-id="${i.id}" title="Eliminar" aria-label="Eliminar">🗑️</button>
               </div>
             </div>`;
           }).join('') || '<div class="muted pad">Sin gastos planificados.</div>'}
@@ -484,15 +487,15 @@ function expenseRow(e) {
   const cat = Store.cat(e.categoryId), m = Store.method(e.methodId);
   return `
     <div class="row">
-      <div class="row-ico" style="background:${hexA(cat.color, .18)}">${cat.icon}</div>
+      <div class="row-ico" style="background:${hexA(cat.color, .18)}">${esc(cat.icon)}</div>
       <div class="row-main">
         <div class="row-title">${esc(e.desc || cat.name)}</div>
-        <div class="row-meta">${esc(cat.name)} · ${m.icon} ${esc(m.name)}${e.budgetItemId ? ' · <span class="tag">📋 presupuesto</span>' : ''}${e.note && !e.budgetItemId ? ` · ${esc(e.note)}` : ''}</div>
+        <div class="row-meta">${esc(cat.name)} · ${esc(m.icon)} ${esc(m.name)}${e.budgetItemId ? ' · <span class="tag">📋 presupuesto</span>' : ''}${e.note && !e.budgetItemId ? ` · ${esc(e.note)}` : ''}</div>
       </div>
       <div class="row-amt">${fmt(-e.amount)}</div>
       <div class="row-actions">
-        <button class="icon-btn sm" data-action="editExpense" data-id="${e.id}" title="Editar">✏️</button>
-        <button class="icon-btn sm" data-action="delExpense" data-id="${e.id}" title="Eliminar">🗑️</button>
+        <button class="icon-btn sm" data-action="editExpense" data-id="${e.id}" title="Editar" aria-label="Editar">✏️</button>
+        <button class="icon-btn sm" data-action="delExpense" data-id="${e.id}" title="Eliminar" aria-label="Eliminar">🗑️</button>
       </div>
     </div>`;
 }
@@ -511,10 +514,12 @@ function filteredExpenses() {
 
 function viewGastos() {
   const list = filteredExpenses();
+  const limit = UI.expenseLimit || 50;
+  const visibleList = list.slice(0, limit);
   const f = UI.filters;
   const defDate = UI.month === monthKey() ? todayISO() : `${UI.month}-01`;
   const groups = {};
-  list.forEach(e => (groups[e.date] ||= []).push(e));
+  visibleList.forEach(e => (groups[e.date] ||= []).push(e));
   const c = calc(UI.month);
 
   // Atajos de categorías más usadas
@@ -528,25 +533,25 @@ function viewGastos() {
       <form data-submit="quickExpense" class="qa-form" autocomplete="off">
         <div class="qa-amount">
           <span>${esc(Store.state.settings.currency)}</span>
-          <input name="amount" type="number" step="0.01" min="0.01" placeholder="0.00" required id="qaAmount">
+          <input name="amount" type="number" step="0.01" min="0.01" placeholder="0.00" required id="qaAmount" aria-label="Monto del gasto">
         </div>
-        <input name="desc" placeholder="¿En qué gastaste? (ej. café, Uber, farmacia)" class="qa-desc">
-        <select name="categoryId" id="qaCat">${catOptions(UI.lastCat)}</select>
-        <select name="methodId">${methodOptions(UI.lastMethod)}</select>
-        <input name="date" type="date" value="${defDate}">
+        <input name="desc" placeholder="¿En qué gastaste? (ej. café, Uber, farmacia)" class="qa-desc" aria-label="Descripción del gasto">
+        <select name="categoryId" id="qaCat" aria-label="Categoría">${catOptions(UI.lastCat)}</select>
+        <select name="methodId" aria-label="Forma de pago">${methodOptions(UI.lastMethod)}</select>
+        <input name="date" type="date" value="${defDate}" aria-label="Fecha del gasto">
         <button class="btn btn-primary">Agregar</button>
       </form>
       <div class="quick-cats">
         <span class="muted">Rápido:</span>
-        ${quick.map(cat => `<button class="chip-btn ${UI.lastCat === cat.id ? 'on' : ''}" data-action="pickCat" data-id="${cat.id}" style="--c:${cat.color}">${cat.icon} ${esc(cat.name)}</button>`).join('')}
+        ${quick.map(cat => `<button type="button" class="chip-btn ${UI.lastCat === cat.id ? 'on' : ''}" data-action="pickCat" data-id="${cat.id}" style="--c:${safeColor(cat.color)}">${esc(cat.icon)} ${esc(cat.name)}</button>`).join('')}
       </div>
     </div>
 
     <div class="filters">
-      <input type="search" placeholder="🔎 Buscar…" value="${esc(f.q)}" data-filter="q">
-      <select data-filter="cat"><option value="">Todas las categorías</option>${catOptions(f.cat)}</select>
-      <select data-filter="method"><option value="">Todas las formas de pago</option>${methodOptions(f.method)}</select>
-      <select data-filter="quincena">
+      <input type="search" placeholder="🔎 Buscar…" value="${esc(f.q)}" data-filter="q" aria-label="Buscar gastos">
+      <select data-filter="cat" aria-label="Filtrar por categoría"><option value="">Todas las categorías</option>${catOptions(f.cat)}</select>
+      <select data-filter="method" aria-label="Filtrar por forma de pago"><option value="">Todas las formas de pago</option>${methodOptions(f.method)}</select>
+      <select data-filter="quincena" aria-label="Filtrar por quincena">
         <option value="">Mes completo</option>
         <option value="1" ${f.quincena === '1' ? 'selected' : ''}>1ª quincena</option>
         <option value="2" ${f.quincena === '2' ? 'selected' : ''}>2ª quincena</option>
@@ -556,7 +561,7 @@ function viewGastos() {
     </div>
 
     <div class="summary-strip">
-      <div><span class="muted">Mostrando</span> <b>${list.length}</b> gastos</div>
+      <div><span class="muted">Mostrando</span> <b>${visibleList.length}</b> de <b>${list.length}</b> gastos</div>
       <div><span class="muted">Total</span> <b>${fmt(sum(list, e => e.amount))}</b></div>
       <div><span class="muted">Fuera del presupuesto</span> <b class="txt-warn">${fmt(c.unplannedTotal)}</b></div>
       <div><span class="muted">Disponible del mes</span> <b class="${c.income - c.spent < 0 ? 'txt-danger' : 'txt-ok'}">${fmt(c.income - c.spent)}</b></div>
@@ -568,6 +573,7 @@ function viewGastos() {
           <div class="day-head"><span>${niceDate(d)}</span><span class="muted">${fmt(sum(items, e => e.amount))}</span></div>
           <div class="list">${items.map(expenseRow).join('')}</div>
         </div>`).join('') : empty('No hay gastos que mostrar', 'Usa el formulario de arriba para anotar lo que gastas. ¡Hasta el café cuenta!')}
+      ${list.length > visibleList.length ? `<div class="row-gap center"><button class="btn" data-action="moreExpenses">Ver más gastos (${list.length - visibleList.length} restantes)</button></div>` : ''}
     </div>`;
 }
 
@@ -636,20 +642,21 @@ function viewPrestamos() {
           : `<span class="status status-pagado">En ${dLeft} días (${shortDate(l.nextPaymentDate)})</span>`;
         const capPct = pct(b.principalPart, b.installment);
         const intPct = 100 - capPct;
+        const lColor = safeColor(l.color, '#7c5cff');
         return `
-        <div class="card loan-card" style="border-top: 4px solid ${esc(l.color || '#7c5cff')}">
+        <div class="card loan-card" style="border-top: 4px solid ${lColor}">
           <div class="card-head">
             <div style="display:flex;align-items:center;gap:10px">
-              <div class="row-ico" style="background:${hexA(l.color || '#7c5cff', 0.18)};color:${esc(l.color || '#7c5cff')};font-weight:800">🏦</div>
+              <div class="row-ico" style="background:${hexA(lColor, 0.18)};color:${lColor};font-weight:800">🏦</div>
               <div>
                 <h3 style="margin:0">${esc(l.bank)}</h3>
                 <div class="muted small">Préstamo #${esc(l.number || '—')}${l.linkedAccount ? ` · Cta. ${esc(l.linkedAccount)}` : ''}</div>
               </div>
             </div>
             <div class="row-actions">
-              <button class="btn btn-sm btn-primary" data-action="payLoanInstallment" data-id="${l.id}">💳 Registrar pago</button>
-              <button class="icon-btn sm" data-action="editLoan" data-id="${l.id}" title="Editar">✏️</button>
-              <button class="icon-btn sm" data-action="delLoan" data-id="${l.id}" title="Eliminar">🗑️</button>
+              <button class="btn btn-sm btn-primary" data-action="payLoanInstallment" data-id="${esc(l.id)}">💳 Registrar pago</button>
+              <button class="icon-btn sm" data-action="editLoan" data-id="${esc(l.id)}" title="Editar" aria-label="Editar préstamo ${esc(l.bank)}">✏️</button>
+              <button class="icon-btn sm" data-action="delLoan" data-id="${esc(l.id)}" title="Eliminar" aria-label="Eliminar préstamo ${esc(l.bank)}">🗑️</button>
             </div>
           </div>
 
@@ -661,13 +668,13 @@ function viewPrestamos() {
             </div>
             <div style="text-align:right">
               <div class="muted small">Tasa anual</div>
-              <div class="loan-rate-badge" style="color:${esc(l.color || '#7c5cff')}">${b.rate}%</div>
+              <div class="loan-rate-badge" style="color:${lColor}">${b.rate}%</div>
               <div class="muted small">${esc(l.status || 'Vigente')}</div>
             </div>
           </div>
 
           <div class="progress" style="margin:10px 0 14px" title="${Math.round(b.progressPct)}% del capital saldado">
-            <div class="progress-bar" style="width:${b.progressPct}%;background:${esc(l.color || '#7c5cff')}"></div>
+            <div class="progress-bar" style="width:${b.progressPct}%;background:${lColor}"></div>
           </div>
 
           <div class="loan-grid">
@@ -787,16 +794,16 @@ function viewCobros() {
         const pOwed = Store.totalOwed(p.id);
         const active = !isAll && activePerson.id === p.id;
         return `
-          <div class="person-pill ${active ? 'active' : ''}" style="--c:${esc(p.color || '#7c5cff')}" data-action="selectDebtor" data-id="${p.id}">
+          <div class="person-pill ${active ? 'active' : ''}" role="button" tabindex="0" style="--c:${safeColor(p.color, '#7c5cff')}" data-action="selectDebtor" data-id="${esc(p.id)}">
             <span class="person-ico">${esc(p.icon || '👤')}</span>
             <div class="person-info">
               <div class="person-name">${esc(p.name)}</div>
               <div class="person-amt ${pOwed > 0 ? 'txt-warn' : 'muted'}">${pOwed > 0 ? `Debe ${fmt(pOwed)}` : 'Al día ✓'}</div>
             </div>
-            <button class="icon-btn sm person-edit" data-action="editDebtor" data-id="${p.id}" title="Editar persona">✏️</button>
+            <button type="button" class="icon-btn sm person-edit" data-action="editDebtor" data-id="${esc(p.id)}" title="Editar persona" aria-label="Editar ${esc(p.name)}">✏️</button>
           </div>`;
       }).join('')}
-      <div class="person-pill ${isAll ? 'active' : ''}" style="--c:var(--accent)" data-action="selectDebtor" data-id="all">
+      <div class="person-pill ${isAll ? 'active' : ''}" role="button" tabindex="0" style="--c:var(--accent)" data-action="selectDebtor" data-id="all">
         <span class="person-ico">👥</span>
         <div class="person-info">
           <div class="person-name">Todos</div>
@@ -807,7 +814,7 @@ function viewCobros() {
     </div>
 
     <div class="kpis">
-      <div class="kpi highlight" style="${activePerson ? `background:linear-gradient(135deg, ${esc(activePerson.color)}, color-mix(in srgb, ${esc(activePerson.color)} 60%, #000))` : ''}">
+      <div class="kpi highlight" style="${activePerson ? `background:linear-gradient(135deg, ${safeColor(activePerson.color)}, color-mix(in srgb, ${safeColor(activePerson.color)} 60%, #000))` : ''}">
         <div class="kpi-label">💰 ${isAll ? 'Total que te deben' : `${esc(personName)} te debe`}</div>
         <div class="kpi-value">${fmt(owed)}</div>
         <div class="kpi-foot">${pending.length} registros pendientes</div>
@@ -844,8 +851,8 @@ function viewCobros() {
             const p = Store.debtor(d.debtorId);
             return `<tr class="${st === 'pagado' ? 'is-paid' : ''}">
               <td>${shortDate(d.date)}</td>
-              ${isAll ? `<td><span class="chip" style="--c:${esc(p.color)}">${esc(p.icon)} ${esc(p.name)}</span></td>` : ''}
-              <td><span class="type-pill type-${d.type}">${t.icon} ${t.label}</span></td>
+              ${isAll ? `<td><span class="chip" style="--c:${safeColor(p.color)}">${esc(p.icon)} ${esc(p.name)}</span></td>` : ''}
+              <td><span class="type-pill type-${esc(d.type)}">${t.icon} ${t.label}</span></td>
               <td>${esc(d.desc || '—')}${rel ? `<div class="muted small">↳ de: ${esc(rel.desc || shortDate(rel.date))}</div>` : ''}${d.paidDate && st === 'pagado' ? `<div class="muted small">Pagado el ${shortDate(d.paidDate)}</div>` : ''}</td>
               <td class="num">${fmt(d.amount)}</td>
               <td class="num muted">${Number(d.paid) ? fmt(d.paid) : '—'}</td>
@@ -937,8 +944,8 @@ function viewAjustes() {
         <div class="setting">
           <div><b>Color principal</b><div class="muted">Elige tu color favorito</div></div>
           <div class="swatches">
-            ${ACCENTS.map(a => `<button class="swatch ${a === s.accent ? 'on' : ''}" style="background:${a}" data-action="setAccent" data-v="${a}"></button>`).join('')}
-            <input type="color" value="${s.accent}" data-setting="accent" title="Color personalizado">
+            ${ACCENTS.map(a => `<button class="swatch ${a === s.accent ? 'on' : ''}" style="background:${a}" data-action="setAccent" data-v="${a}" aria-label="Color ${a}"></button>`).join('')}
+            <input type="color" value="${safeColor(s.accent)}" data-setting="accent" title="Color personalizado" aria-label="Color personalizado">
           </div>
         </div>
       </div>
@@ -959,11 +966,11 @@ function viewAjustes() {
         <div class="list compact">
           ${Store.state.categories.map(c => `
             <div class="row edit-row">
-              <input class="emoji-input" value="${esc(c.icon)}" data-cat="${c.id}" data-field="icon" maxlength="4">
-              <input class="name-input" value="${esc(c.name)}" data-cat="${c.id}" data-field="name">
-              <input type="color" value="${c.color}" data-cat="${c.id}" data-field="color">
+              <input class="emoji-input" value="${esc(c.icon)}" data-cat="${esc(c.id)}" data-field="icon" maxlength="4" aria-label="Ícono de ${esc(c.name)}">
+              <input class="name-input" value="${esc(c.name)}" data-cat="${esc(c.id)}" data-field="name" aria-label="Nombre de categoría">
+              <input type="color" value="${safeColor(c.color)}" data-cat="${esc(c.id)}" data-field="color" aria-label="Color de ${esc(c.name)}">
               <span class="muted small">${usage[c.id] || 0} usos</span>
-              <button class="icon-btn sm" data-action="delCategory" data-id="${c.id}" title="Eliminar">🗑️</button>
+              <button class="icon-btn sm" data-action="delCategory" data-id="${esc(c.id)}" title="Eliminar" aria-label="Eliminar ${esc(c.name)}">🗑️</button>
             </div>`).join('')}
         </div>
       </div>
@@ -974,10 +981,10 @@ function viewAjustes() {
           <div class="list compact">
             ${Store.state.methods.map(m => `
               <div class="row edit-row">
-                <input class="emoji-input" value="${esc(m.icon)}" data-method="${m.id}" data-field="icon" maxlength="4">
-                <input class="name-input" value="${esc(m.name)}" data-method="${m.id}" data-field="name">
-                <label class="toggle small"><input type="checkbox" ${m.isCard ? 'checked' : ''} data-method="${m.id}" data-field="isCard"><span></span> Es tarjeta de crédito</label>
-                <button class="icon-btn sm" data-action="delMethod" data-id="${m.id}" title="Eliminar">🗑️</button>
+                <input class="emoji-input" value="${esc(m.icon)}" data-method="${esc(m.id)}" data-field="icon" maxlength="4" aria-label="Ícono de ${esc(m.name)}">
+                <input class="name-input" value="${esc(m.name)}" data-method="${esc(m.id)}" data-field="name" aria-label="Nombre de forma de pago">
+                <label class="toggle small"><input type="checkbox" ${m.isCard ? 'checked' : ''} data-method="${esc(m.id)}" data-field="isCard"><span></span> Es tarjeta de crédito</label>
+                <button class="icon-btn sm" data-action="delMethod" data-id="${esc(m.id)}" title="Eliminar" aria-label="Eliminar ${esc(m.name)}">🗑️</button>
               </div>`).join('')}
           </div>
         </div>
@@ -1042,7 +1049,7 @@ function findIncome(id) { return Store.budget(UI.month).incomes.find(i => i.id =
 
 function openExpenseModal(e) {
   openModal(e ? 'Editar gasto' : 'Registrar gasto', expenseForm(e), data => {
-    const payload = { amount: Number(data.amount), desc: data.desc, categoryId: data.categoryId, methodId: data.methodId, date: data.date, note: data.note };
+    const payload = { amount: money(data.amount), desc: data.desc, categoryId: data.categoryId, methodId: data.methodId, date: data.date, note: data.note };
     if (e) {
       if (e.budgetItemId) delete payload.note;
       Store.updateExpense(e.id, payload);
@@ -1061,8 +1068,8 @@ function openDebtModal(d, type) {
   openModal(isNew ? `Nuevo registro · ${activePerson.name}` : 'Editar registro', debtForm(d || { type }), data => {
     const payload = {
       debtorId: data.debtorId || activePerson.id,
-      type: data.type, date: data.date, desc: data.desc, amount: Number(data.amount) || 0,
-      paid: Math.min(Number(data.paid) || 0, Number(data.amount) || 0),
+      type: data.type, date: data.date, desc: data.desc, amount: money(data.amount),
+      paid: money(Math.min(money(data.paid), money(data.amount))),
       relatedId: data.type === 'courier' ? (data.relatedId || '') : '',
     };
     if (payload.paid >= payload.amount && payload.amount > 0) payload.paidDate = (d && d.paidDate) || todayISO();
@@ -1084,30 +1091,37 @@ const actions = {
       const b = Store.budget(UI.month);
       const ids = new Set(b.items.map(i => i.id));
       Store.state.expenses.forEach(e => { if (ids.has(e.budgetItemId)) delete e.budgetItemId; });
+      Store.recordDeletion('budget:' + UI.month);
       delete Store.state.budgets[UI.month]; Store.save();
     });
   },
   addIncome: el => openModal('Nuevo ingreso', incomeForm({ q: Number(el.dataset.q) }), d => {
-    Store.budget(UI.month).incomes.push({ id: uid(), name: d.name, amount: Number(d.amount), q: Number(d.q) }); Store.save();
+    Store.budget(UI.month).incomes.push({ id: uid(), name: d.name, amount: money(d.amount), q: Number(d.q), updatedAt: Date.now() }); Store.save();
   }),
-  editIncome: el => { const i = findIncome(el.dataset.id); openModal('Editar ingreso', incomeForm(i), d => { Object.assign(i, { name: d.name, amount: Number(d.amount), q: Number(d.q) }); Store.save(); }); },
-  delIncome: el => withUndo('Ingreso eliminado', () => { const b = Store.budget(UI.month); b.incomes = b.incomes.filter(i => i.id !== el.dataset.id); Store.save(); }),
+  editIncome: el => { const i = findIncome(el.dataset.id); openModal('Editar ingreso', incomeForm(i), d => { Object.assign(i, { name: d.name, amount: money(d.amount), q: Number(d.q), updatedAt: Date.now() }); Store.save(); }); },
+  delIncome: el => withUndo('Ingreso eliminado', () => {
+    Store.recordDeletion(el.dataset.id);
+    const b = Store.budget(UI.month); b.incomes = b.incomes.filter(i => i.id !== el.dataset.id); Store.save();
+  }),
   addItem: el => openModal('Nuevo gasto planificado', itemForm({ q: Number(el.dataset.q) }), d => {
-    Store.budget(UI.month).items.push({ id: uid(), name: d.name, amount: Number(d.amount), q: Number(d.q), categoryId: d.categoryId, methodId: d.methodId, paid: false }); Store.save();
+    Store.budget(UI.month).items.push({ id: uid(), name: d.name, amount: money(d.amount), q: Number(d.q), categoryId: d.categoryId, methodId: d.methodId, paid: false, updatedAt: Date.now() }); Store.save();
   }),
   editItem: el => {
     const i = findItem(el.dataset.id);
     openModal('Editar gasto planificado', itemForm(i), d => {
-      Object.assign(i, { name: d.name, amount: Number(d.amount), q: Number(d.q), categoryId: d.categoryId, methodId: d.methodId });
+      const now = Date.now();
+      Object.assign(i, { name: d.name, amount: money(d.amount), q: Number(d.q), categoryId: d.categoryId, methodId: d.methodId, updatedAt: now });
       // Mantener sincronizado el gasto vinculado
       const e = Store.state.expenses.find(x => x.budgetItemId === i.id);
-      if (e) Object.assign(e, { desc: i.name, amount: i.amount, categoryId: i.categoryId, methodId: i.methodId });
+      if (e) Object.assign(e, { desc: i.name, amount: i.amount, categoryId: i.categoryId, methodId: i.methodId, updatedAt: now });
       Store.save();
     });
   },
   delItem: el => withUndo('Partida eliminada', () => {
+    Store.recordDeletion(el.dataset.id);
     const b = Store.budget(UI.month);
     b.items = b.items.filter(i => i.id !== el.dataset.id);
+    Store.state.expenses.filter(e => e.budgetItemId === el.dataset.id).forEach(e => Store.recordDeletion(e.id));
     Store.state.expenses = Store.state.expenses.filter(e => e.budgetItemId !== el.dataset.id);
     Store.save();
   }),
@@ -1122,6 +1136,7 @@ const actions = {
   pickCat: el => { UI.lastCat = el.dataset.id; const s = $('#qaCat'); if (s) s.value = el.dataset.id; $$('.chip-btn').forEach(b => b.classList.toggle('on', b === el)); $('#qaAmount')?.focus(); },
   editExpense: el => openExpenseModal(Store.state.expenses.find(e => e.id === el.dataset.id)),
   delExpense: el => withUndo('Gasto eliminado', () => Store.deleteExpense(el.dataset.id)),
+  moreExpenses: () => { UI.expenseLimit = (UI.expenseLimit || 50) + 50; render(); },
   exportCSV: () => {
     const rows = [['Fecha', 'Descripción', 'Categoría', 'Forma de pago', 'Monto', 'Quincena', 'En presupuesto', 'Nota']];
     filteredExpenses().forEach(e => rows.push([e.date, e.desc, Store.cat(e.categoryId).name, Store.method(e.methodId).name, e.amount, quincenaOf(e.date), e.budgetItemId ? 'Sí' : 'No', e.note || '']));
@@ -1132,9 +1147,9 @@ const actions = {
   /* Préstamos */
   addLoan: () => openModal('Nuevo préstamo', loanForm(), d => {
     Store.addLoan({
-      bank: d.bank, color: d.color || '#0055a5', number: d.number, linkedAccount: d.linkedAccount,
-      originalAmount: Number(d.originalAmount) || 0, balance: Number(d.balance) || 0,
-      installment: Number(d.installment) || 0, rate: Number(d.rate) || 0,
+      bank: d.bank, color: safeColor(d.color, '#0055a5'), number: d.number, linkedAccount: d.linkedAccount,
+      originalAmount: money(d.originalAmount), balance: money(d.balance),
+      installment: money(d.installment), rate: money(d.rate),
       nextPaymentDate: d.nextPaymentDate, endDate: d.endDate, rateReviewDate: d.rateReviewDate,
       status: d.status || 'Vigente (sin atraso)',
     });
@@ -1145,9 +1160,9 @@ const actions = {
     if (!l) return;
     openModal(`Editar · ${l.bank}`, loanForm(l), d => {
       Store.updateLoan(l.id, {
-        bank: d.bank, color: d.color || l.color, number: d.number, linkedAccount: d.linkedAccount,
-        originalAmount: Number(d.originalAmount) || 0, balance: Number(d.balance) || 0,
-        installment: Number(d.installment) || 0, rate: Number(d.rate) || 0,
+        bank: d.bank, color: safeColor(d.color, l.color), number: d.number, linkedAccount: d.linkedAccount,
+        originalAmount: money(d.originalAmount), balance: money(d.balance),
+        installment: money(d.installment), rate: money(d.rate),
         nextPaymentDate: d.nextPaymentDate, endDate: d.endDate, rateReviewDate: d.rateReviewDate,
         status: d.status || 'Vigente (sin atraso)',
       });
@@ -1174,13 +1189,13 @@ const actions = {
       <label class="toggle"><input type="checkbox" name="recordExpense" checked><span></span> Anotar también en la pestaña de Gastos</label>
       <div class="form-actions"><button type="button" class="btn" data-action="closeModal">Cancelar</button><button class="btn btn-primary">Aplicar pago</button></div>
     </form>`, d => {
-      const amt = Number(d.amount) || 0;
+      const amt = money(d.amount);
       const isExtra = d.type === 'extra';
-      const interest = isExtra ? 0 : Math.min(amt, b.interestPart);
-      const principal = Math.max(0, amt - interest);
-      const newBalance = Math.max(0, +(b.balance - principal).toFixed(2));
+      const interest = isExtra ? 0 : money(Math.min(amt, b.interestPart));
+      const principal = money(Math.max(0, amt - interest));
+      const newBalance = money(Math.max(0, b.balance - principal));
       const payments = Array.isArray(l.payments) ? [...l.payments] : [];
-      payments.push({ id: uid(), date: d.date, amount: amt, principal: +principal.toFixed(2), interest: +interest.toFixed(2), type: d.type });
+      payments.push({ id: uid(), date: d.date, amount: amt, principal, interest, type: d.type });
       const patch = { balance: newBalance, payments };
       if (!isExtra && l.nextPaymentDate) patch.nextPaymentDate = nextMonthISO(l.nextPaymentDate);
       Store.updateLoan(l.id, patch);
@@ -1206,7 +1221,7 @@ const actions = {
     render();
   },
   addDebtor: () => openModal('Agregar persona', debtorForm(), d => {
-    const p = Store.addDebtor({ name: d.name, icon: d.icon || '👤', color: d.color || '#3fa7ff' });
+    const p = Store.addDebtor({ name: d.name, icon: d.icon || '👤', color: safeColor(d.color, '#3fa7ff') });
     UI.debtPerson = p.id;
     toast(`${p.name} agregado`);
   }),
@@ -1214,7 +1229,7 @@ const actions = {
     ev.stopPropagation();
     const p = Store.debtor(el.dataset.id);
     openModal(`Editar · ${p.name}`, debtorForm(p), d => {
-      Store.updateDebtor(p.id, { name: d.name, icon: d.icon || p.icon, color: d.color || p.color });
+      Store.updateDebtor(p.id, { name: d.name, icon: d.icon || p.icon, color: safeColor(d.color, p.color) });
       toast('Persona actualizada');
     });
   },
@@ -1233,7 +1248,7 @@ const actions = {
   delDebt: el => withUndo('Registro eliminado', () => Store.deleteDebt(el.dataset.id)),
   toggleDebt: el => {
     const d = Store.state.debts.find(x => x.id === el.dataset.id);
-    if (Store.debtPending(d) > 0) Store.updateDebt(d.id, { paid: Number(d.amount), paidDate: todayISO() });
+    if (Store.debtPending(d) > 0) Store.updateDebt(d.id, { paid: money(d.amount), paidDate: todayISO() });
     else Store.updateDebt(d.id, { paid: 0, paidDate: '' });
     toast(Store.debtPending(d) > 0 ? 'Marcado como pendiente' : 'Marcado como pagado ✅');
     render();
@@ -1248,25 +1263,27 @@ const actions = {
       ${UI.debtPerson === 'all' ? `
         <label>¿Quién te pagó?
           <select name="debtorId">
-            ${debtors.map(p => `<option value="${p.id}" ${p.id === targetPerson.id ? 'selected' : ''}>${esc(p.icon)} ${esc(p.name)} (debe ${fmt(Store.totalOwed(p.id))})</option>`).join('')}
+            ${debtors.map(p => `<option value="${esc(p.id)}" ${p.id === targetPerson.id ? 'selected' : ''}>${esc(p.icon)} ${esc(p.name)} (debe ${fmt(Store.totalOwed(p.id))})</option>`).join('')}
           </select>
         </label>
-      ` : `<input type="hidden" name="debtorId" value="${targetPerson.id}">`}
+      ` : `<input type="hidden" name="debtorId" value="${esc(targetPerson.id)}">`}
       <p class="muted">Te debe <b>${fmt(owed)}</b>. El pago se aplicará a sus registros pendientes más antiguos primero.</p>
       <div class="big-amount"><span>${esc(Store.state.settings.currency)}</span><input name="amount" type="number" step="0.01" min="0.01" value="${owed}" required autofocus></div>
       <label>Fecha<input name="date" type="date" value="${todayISO()}"></label>
       <div class="form-actions"><button type="button" class="btn" data-action="closeModal">Cancelar</button><button class="btn btn-ok">Aplicar pago</button></div>
     </form>`, d => {
-      let left = Number(d.amount) || 0;
+      let left = money(d.amount);
       const pid = d.debtorId || targetPerson.id;
       const pend = Store.state.debts
         .filter(x => x.debtorId === pid && Store.debtPending(x) > 0)
         .sort((a, b) => a.date.localeCompare(b.date));
+      const now = Date.now();
       for (const x of pend) {
         if (left <= 0) break;
-        const take = Math.min(left, Store.debtPending(x));
-        x.paid = (Number(x.paid) || 0) + take;
-        left -= take;
+        const take = money(Math.min(left, Store.debtPending(x)));
+        x.paid = money((Number(x.paid) || 0) + take);
+        x.updatedAt = now;
+        left = money(left - take);
         if (Store.debtPending(x) <= 0) x.paidDate = d.date;
       }
       Store.save();
@@ -1293,23 +1310,28 @@ const actions = {
 
   /* Ajustes */
   setTheme: el => { Store.state.settings.theme = el.dataset.v; Store.save(); render(); },
-  setAccent: el => { Store.state.settings.accent = el.dataset.v; Store.save(); render(); },
-  addCategory: () => { Store.state.categories.push({ id: uid(), name: 'Nueva categoría', icon: '🏷️', color: ACCENTS[Math.floor(Math.random() * ACCENTS.length)] }); Store.save(); render(); },
+  setAccent: el => { Store.state.settings.accent = safeColor(el.dataset.v, '#2fd07c'); Store.save(); render(); },
+  addCategory: () => { Store.state.categories.push({ id: uid(), name: 'Nueva categoría', icon: '🏷️', color: ACCENTS[Math.floor(Math.random() * ACCENTS.length)], updatedAt: Date.now() }); Store.save(); render(); },
   delCategory: el => {
     const id = el.dataset.id;
     if (Store.state.categories.length <= 1) return toast('Debe quedar al menos una categoría', { type: 'err' });
     withUndo('Categoría eliminada (sus gastos pasaron a “Otros”)', () => {
+      Store.recordDeletion(id);
       Store.state.categories = Store.state.categories.filter(c => c.id !== id);
       const fallback = Store.state.categories.find(c => c.id === 'otros') ? 'otros' : Store.state.categories[0].id;
-      Store.state.expenses.forEach(e => { if (e.categoryId === id) e.categoryId = fallback; });
-      Object.values(Store.state.budgets).forEach(b => b.items.forEach(i => { if (i.categoryId === id) i.categoryId = fallback; }));
+      const now = Date.now();
+      Store.state.expenses.forEach(e => { if (e.categoryId === id) { e.categoryId = fallback; e.updatedAt = now; } });
+      Object.values(Store.state.budgets).forEach(b => b.items.forEach(i => { if (i.categoryId === id) { i.categoryId = fallback; i.updatedAt = now; } }));
       Store.save();
     });
   },
-  addMethod: () => { Store.state.methods.push({ id: uid(), name: 'Nueva forma de pago', icon: '💳', isCard: false }); Store.save(); render(); },
+  addMethod: () => { Store.state.methods.push({ id: uid(), name: 'Nueva forma de pago', icon: '💳', isCard: false, updatedAt: Date.now() }); Store.save(); render(); },
   delMethod: el => {
     if (Store.state.methods.length <= 1) return toast('Debe quedar al menos una forma de pago', { type: 'err' });
-    withUndo('Forma de pago eliminada', () => { Store.state.methods = Store.state.methods.filter(m => m.id !== el.dataset.id); Store.save(); });
+    withUndo('Forma de pago eliminada', () => {
+      Store.recordDeletion(el.dataset.id);
+      Store.state.methods = Store.state.methods.filter(m => m.id !== el.dataset.id); Store.save();
+    });
   },
   exportJSON: () => download(`presupuesto-respaldo-${todayISO()}.json`, Store.exportJSON(), 'application/json'),
   resetEmpty: () => { if (confirm('¿Seguro? Se borrarán TODOS tus datos (descarga un respaldo antes).')) withUndo('Datos borrados', () => Store.reset()); },
@@ -1365,7 +1387,7 @@ document.addEventListener('submit', ev => {
   if (form.dataset.submit === 'quickExpense') {
     const d = formData(form);
     if (!(Number(d.amount) > 0)) return;
-    Store.addExpense({ amount: Number(d.amount), desc: d.desc, categoryId: d.categoryId, methodId: d.methodId, date: d.date, note: '', createdAt: Date.now() });
+    Store.addExpense({ amount: money(d.amount), desc: d.desc, categoryId: d.categoryId, methodId: d.methodId, date: d.date, note: '', createdAt: Date.now() });
     UI.lastCat = d.categoryId; UI.lastMethod = d.methodId;
     const target = d.date.slice(0, 7);
     if (target !== UI.month) UI.month = target;
@@ -1379,6 +1401,7 @@ document.addEventListener('input', ev => {
   const el = ev.target;
   if (el.dataset.filter && el.type === 'search') {
     UI.filters.q = el.value;
+    UI.expenseLimit = 50;
     const pos = el.selectionStart;
     render();
     const s = $('[data-filter="q"]'); s.focus(); s.setSelectionRange(pos, pos);
@@ -1390,21 +1413,31 @@ document.addEventListener('change', ev => {
   const s = Store.state;
   if (el.dataset.filter && el.type !== 'search') {
     UI.filters[el.dataset.filter] = el.type === 'checkbox' ? el.checked : el.value;
+    UI.expenseLimit = 50;
     render(); return;
   }
   if (el.dataset.setting) {
     const k = el.dataset.setting;
-    s.settings[k] = ['smallExpense', 'cardLimit', 'cardBalance'].includes(k) ? Number(el.value) || 0 : el.value;
+    s.settings[k] = ['smallExpense', 'cardLimit', 'cardBalance'].includes(k)
+      ? money(el.value)
+      : k === 'accent'
+        ? safeColor(el.value, s.settings.accent)
+        : el.value;
     if (k === 'debtorName' && !el.value.trim()) s.settings[k] = 'Priscila';
     Store.save(); render(); toast('Ajuste guardado'); return;
   }
   if (el.dataset.cat) {
     const c = s.categories.find(x => x.id === el.dataset.cat);
-    c[el.dataset.field] = el.value || c[el.dataset.field]; Store.save(); render(); return;
+    if (el.dataset.field === 'color') c.color = safeColor(el.value, c.color);
+    else c[el.dataset.field] = el.value || c[el.dataset.field];
+    c.updatedAt = Date.now();
+    Store.save(); render(); return;
   }
   if (el.dataset.method) {
     const m = s.methods.find(x => x.id === el.dataset.method);
-    m[el.dataset.field] = el.type === 'checkbox' ? el.checked : (el.value || m[el.dataset.field]); Store.save(); render(); return;
+    m[el.dataset.field] = el.type === 'checkbox' ? el.checked : (el.value || m[el.dataset.field]);
+    m.updatedAt = Date.now();
+    Store.save(); render(); return;
   }
   if (el.dataset.change === 'debtTypeChange') {
     const rel = $('#modalBody .related');
@@ -1420,8 +1453,14 @@ document.addEventListener('change', ev => {
 });
 
 document.addEventListener('keydown', ev => {
-  const typing = /INPUT|SELECT|TEXTAREA/.test(document.activeElement?.tagName);
-  if (ev.key === 'Escape' && !$('#modalBackdrop').hidden) closeModal();
+  const active = document.activeElement;
+  const typing = /INPUT|SELECT|TEXTAREA/.test(active?.tagName);
+  if (ev.key === 'Escape' && !$('#modalBackdrop').hidden) { closeModal(); return; }
+  if (!typing && (ev.key === 'Enter' || ev.key === ' ') && active?.getAttribute?.('role') === 'button' && active?.dataset?.action) {
+    ev.preventDefault();
+    actions[active.dataset.action]?.(active, ev);
+    return;
+  }
   if (!typing && $('#modalBackdrop').hidden && (ev.key === 'n' || ev.key === 'N')) { ev.preventDefault(); openExpenseModal(); }
 });
 
@@ -1429,9 +1468,9 @@ $('#modalClose').onclick = closeModal;
 $('#modalBackdrop').addEventListener('mousedown', ev => { if (ev.target.id === 'modalBackdrop') closeModal(); });
 $('#fab').onclick = () => openExpenseModal();
 $('#sideAddExpense').onclick = () => openExpenseModal();
-$('#prevMonth').onclick = () => { UI.month = shiftMonth(UI.month, -1); render(); };
-$('#nextMonth').onclick = () => { UI.month = shiftMonth(UI.month, 1); render(); };
-$('#monthLabel').onclick = () => { UI.month = monthKey(); render(); };
+$('#prevMonth').onclick = () => { UI.month = shiftMonth(UI.month, -1); UI.expenseLimit = 50; render(); };
+$('#nextMonth').onclick = () => { UI.month = shiftMonth(UI.month, 1); UI.expenseLimit = 50; render(); };
+$('#monthLabel').onclick = () => { UI.month = monthKey(); UI.expenseLimit = 50; render(); };
 
 /* ---------------- Inicio ---------------- */
 const authBtn = document.getElementById('authSignInBtn');

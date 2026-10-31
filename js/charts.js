@@ -11,7 +11,8 @@ const Charts = {
     let offset = 0;
     const arcs = total > 0 ? segments.filter(s => s.value > 0).map(s => {
       const len = (s.value / total) * c;
-      const arc = `<circle r="${r}" cx="${size / 2}" cy="${size / 2}" fill="none" stroke="${s.color}"
+      const col = typeof safeColor === 'function' ? safeColor(s.color, '#7c5cff') : s.color;
+      const arc = `<circle r="${r}" cx="${size / 2}" cy="${size / 2}" fill="none" stroke="${col}"
         stroke-width="${thickness}" stroke-dasharray="${len} ${c - len}" stroke-dashoffset="${-offset}"
         class="donut-seg"><title>${esc(s.label)}: ${fmt(s.value)}</title></circle>`;
       offset += len;

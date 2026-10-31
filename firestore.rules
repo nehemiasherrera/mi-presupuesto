@@ -20,13 +20,30 @@ service cloud.firestore {
         && email() in get(/databases/$(database)/documents/household/access).data.emails
       );
     }
+    function isValidMainDoc() {
+      return request.resource.data.keys().hasAll(['state', 'updatedBy'])
+        && request.resource.data.state is map
+        && request.resource.data.state.keys().hasAll(['settings', 'budgets', 'expenses', 'debts'])
+        && request.resource.data.state.settings is map
+        && request.resource.data.state.budgets is map
+        && request.resource.data.state.expenses is list
+        && request.resource.data.state.debts is list;
+    }
+    function isValidAccessDoc() {
+      return request.resource.data.keys().hasAll(['emails'])
+        && request.resource.data.emails is list
+        && request.resource.data.emails.size() <= 25;
+    }
 
     match /household/main {
-      allow read, write: if isAllowed();
+      allow read: if isAllowed();
+      allow create, update: if isAllowed() && isValidMainDoc();
+      allow delete: if isOwner();
     }
     match /household/access {
       allow read: if isAllowed();
-      allow write: if isOwner();
+      allow create, update: if isOwner() && isValidAccessDoc();
+      allow delete: if isOwner();
     }
     match /household/activity {
       allow read, write: if isAllowed();
