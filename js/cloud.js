@@ -303,6 +303,9 @@ const Cloud = {
     }, () => {});
 
     // Suscripción al documento dedicado del Préstamo de Raúl (/household/raul_loan)
+    const mainViews = ['resumen', 'presupuesto', 'gastos', 'prestamos', 'cobros', 'ajustes'];
+    const hasMainAccess = this.isOwner() || this.guestPermission(this.user?.email).views.some(v => mainViews.includes(v));
+
     if (this.isOwner() || this.guestPermission(this.user?.email).views.includes('raul')) {
       this.unsubRaul = this.raulLoanRef().onSnapshot(snap => {
         if (snap.exists && snap.data()?.raulLoan) {
@@ -311,12 +314,22 @@ const Cloud = {
         }
         this.status = navigator.onLine === false ? 'offline' : 'synced';
         this.updateBadge();
-      }, () => {});
+      }, () => {
+        // Fallback automático si las reglas de /household/raul_loan aún no se han pegado en la consola de Firebase
+        if (!hasMainAccess && !this.unsub) {
+          this.unsub = this.docRef().onSnapshot(snap => {
+            if (snap.exists && snap.data()?.state?.raulLoan) {
+              Store.applyRemoteRaulLoan(snap.data().state.raulLoan);
+              if (typeof render === 'function') render();
+            }
+            this.status = navigator.onLine === false ? 'offline' : 'synced';
+            this.updateBadge();
+          }, () => {});
+        }
+      });
     }
 
     // Suscripción al documento principal (/household/main) solo si tiene acceso a vistas principales
-    const mainViews = ['resumen', 'presupuesto', 'gastos', 'prestamos', 'cobros', 'ajustes'];
-    const hasMainAccess = this.isOwner() || this.guestPermission(this.user?.email).views.some(v => mainViews.includes(v));
     if (!hasMainAccess) {
       if (typeof render === 'function') render();
       return;
@@ -450,7 +463,7 @@ const Cloud = {
           raulLoan: JSON.parse(JSON.stringify(state.raulLoan)),
           updatedBy: this.user.email,
           updatedAtServer: firebase.firestore.FieldValue.serverTimestamp(),
-        }));
+        }).catch(() => {}));
       }
       await Promise.all(tasks);
       this.pendingPush = false;
