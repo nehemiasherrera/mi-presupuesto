@@ -5,6 +5,7 @@
 presupuesto-respaldo-*.json
 Prestamos/
 prestamos/
+Control_del_Prestamo.html
 
 # Archivos temporales y del sistema
 .DS_Store

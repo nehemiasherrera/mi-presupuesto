@@ -12,12 +12,48 @@ service cloud.firestore {
           'susanpenaestevez92@gmail.com'
         ];
     }
+    function accessDoc() {
+      return get(/databases/$(database)/documents/household/access).data;
+    }
     function isAllowed() {
       return isOwner() || (
         request.auth != null
         && request.auth.token.email_verified == true
         && exists(/databases/$(database)/documents/household/access)
-        && email() in get(/databases/$(database)/documents/household/access).data.emails
+        && email() in accessDoc().emails
+      );
+    }
+    function guestPerm() {
+      return ('permissions' in accessDoc() && email() in accessDoc().permissions)
+        ? accessDoc().permissions[email()]
+        : { 'views': ['raul'], 'canEdit': false };
+    }
+    function canViewMain() {
+      return isOwner() || (
+        isAllowed()
+        && ('views' in guestPerm())
+        && guestPerm().views.hasAny(['resumen', 'presupuesto', 'gastos', 'prestamos', 'cobros', 'ajustes'])
+      );
+    }
+    function canEditMain() {
+      return isOwner() || (
+        canViewMain()
+        && ('canEdit' in guestPerm())
+        && guestPerm().canEdit == true
+      );
+    }
+    function canViewRaul() {
+      return isOwner() || (
+        isAllowed()
+        && ('views' in guestPerm())
+        && ('raul' in guestPerm().views)
+      );
+    }
+    function canEditRaul() {
+      return isOwner() || (
+        canViewRaul()
+        && ('canEdit' in guestPerm())
+        && guestPerm().canEdit == true
       );
     }
     function isValidMainDoc() {
@@ -29,6 +65,12 @@ service cloud.firestore {
         && request.resource.data.state.expenses is list
         && request.resource.data.state.debts is list;
     }
+    function isValidRaulDoc() {
+      return request.resource.data.keys().hasAll(['raulLoan', 'updatedBy'])
+        && request.resource.data.raulLoan is map
+        && request.resource.data.raulLoan.payments is list
+        && request.resource.data.raulLoan.movements is list;
+    }
     function isValidAccessDoc() {
       return request.resource.data.keys().hasAll(['emails'])
         && request.resource.data.emails is list
@@ -36,8 +78,13 @@ service cloud.firestore {
     }
 
     match /household/main {
-      allow read: if isAllowed();
-      allow create, update: if isAllowed() && isValidMainDoc();
+      allow read: if canViewMain();
+      allow create, update: if canEditMain() && isValidMainDoc();
+      allow delete: if isOwner();
+    }
+    match /household/raul_loan {
+      allow read: if canViewRaul();
+      allow create, update: if canEditRaul() && isValidRaulDoc();
       allow delete: if isOwner();
     }
     match /household/access {

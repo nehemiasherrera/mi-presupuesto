@@ -71,6 +71,20 @@ function defaultLoans() {
   return [];
 }
 
+function defaultRaulLoan() {
+  return {
+    principal: 81500,
+    installment: 7750,
+    termMonths: 12,
+    firstYear: 2026,
+    firstMonth: 9, // Octubre (0-based)
+    payDay: 30,
+    payments: [],  // [{ id, fecha, monto, createdAt, updatedAt }]
+    movements: [], // [{ id, accion: 'pago'|'borrado'|'ajuste', fecha, monto, cuando, por, email, nota }]
+    updatedAt: 0,
+  };
+}
+
 function defaultDebtors(primaryName = 'Priscila') {
   return [
     { id: 'priscila', name: primaryName || 'Priscila', icon: '👩🏻', color: '#7c5cff' },
@@ -103,6 +117,7 @@ function defaultState() {
     expenses: [],
     debts: [],
     loans: defaultLoans(),
+    raulLoan: defaultRaulLoan(),
   };
 }
 
@@ -234,12 +249,66 @@ const Store = {
         b.items.forEach(i => { if (!i.id) i.id = uid(); i.amount = money(i.amount); });
       }
     }
+
+    const dr = defaultRaulLoan();
+    if (!this.state.raulLoan || typeof this.state.raulLoan !== 'object') {
+      this.state.raulLoan = dr;
+    } else {
+      const rl = this.state.raulLoan;
+      rl.principal = money(rl.principal || dr.principal);
+      rl.installment = money(rl.installment || dr.installment);
+      rl.termMonths = Number(rl.termMonths) || dr.termMonths;
+      rl.firstYear = Number(rl.firstYear) || dr.firstYear;
+      rl.firstMonth = rl.firstMonth !== undefined ? Number(rl.firstMonth) : dr.firstMonth;
+      rl.payDay = Number(rl.payDay) || dr.payDay;
+      if (!Array.isArray(rl.payments)) rl.payments = [];
+      if (!Array.isArray(rl.movements)) rl.movements = [];
+      rl.payments.forEach(p => {
+        if (!p.id) p.id = uid();
+        p.monto = money(p.monto);
+        p.fecha = String(p.fecha || todayISO()).slice(0, 10);
+      });
+      rl.movements.forEach(m => {
+        if (!m.id) m.id = uid();
+        m.monto = money(m.monto);
+      });
+    }
   },
 
   save(skipCloud = false) {
     this.state.updatedAt = Date.now();
     this.persistLocal();
     if (!skipCloud && typeof Cloud !== 'undefined') Cloud.push(this.state);
+  },
+
+  /** Combina de forma segura el préstamo de Raúl entre local y remoto */
+  mergeRaulObj(localRaul, remoteRaul, delSet = new Set(), localTime = 0, remoteTime = 0) {
+    const base = defaultRaulLoan();
+    const l = localRaul || base;
+    const r = remoteRaul || base;
+    const rNewer = (Number(r.updatedAt) || remoteTime) >= (Number(l.updatedAt) || localTime);
+    const payments = mergeById(l.payments || [], r.payments || [], delSet, localTime, remoteTime);
+    // Movimientos son inmutables (append-only)
+    const movMap = new Map();
+    for (const m of [...(l.movements || []), ...(r.movements || [])]) {
+      if (m && m.id) movMap.set(m.id, m);
+    }
+    const movements = [...movMap.values()].sort((a, b) => String(a.cuando || '').localeCompare(String(b.cuando || '')));
+    return {
+      ...(rNewer ? { ...l, ...r } : { ...r, ...l }),
+      payments,
+      movements,
+      updatedAt: Math.max(Number(l.updatedAt) || 0, Number(r.updatedAt) || 0),
+    };
+  },
+
+  applyRemoteRaulLoan(remoteRaul) {
+    if (!remoteRaul || typeof remoteRaul !== 'object') return;
+    if (!this.state) this.load();
+    const delSet = new Set(this.state.deletedIds || []);
+    this.state.raulLoan = this.mergeRaulObj(this.state.raulLoan, remoteRaul, delSet, this.state.updatedAt, remoteRaul.updatedAt);
+    this.normalize();
+    this.persistLocal();
   },
 
   /** Combina de forma segura el estado remoto con el local sin perder cambios concurrentes */
@@ -288,6 +357,7 @@ const Store = {
       expenses: mergeById(this.state.expenses, remoteState.expenses, delSet, localTime, remoteTime),
       debts: mergeById(this.state.debts, remoteState.debts, delSet, localTime, remoteTime),
       loans: mergeById(this.state.loans, remoteState.loans, delSet, localTime, remoteTime),
+      raulLoan: this.mergeRaulObj(this.state.raulLoan, remoteState.raulLoan, delSet, localTime, remoteTime),
     };
     this.normalize();
     this.persistLocal();
@@ -298,7 +368,8 @@ const Store = {
     return Number(st.updatedAt) > 0
       || (st.expenses && st.expenses.length > 0)
       || (st.debts && st.debts.length > 0)
-      || (st.budgets && Object.keys(st.budgets).length > 0);
+      || (st.budgets && Object.keys(st.budgets).length > 0)
+      || (st.raulLoan && Array.isArray(st.raulLoan.payments) && st.raulLoan.payments.length > 0);
   },
 
   reset() {
@@ -526,6 +597,161 @@ const Store = {
       remainingInstallments, totalFuturePayments, totalFutureInterest,
       orig, paidPrincipal, progressPct,
     };
+  },
+
+  /* ---------- Préstamo Raúl (Libreta de pagos) ---------- */
+  raulDue(k) {
+    const rl = this.state?.raulLoan || defaultRaulLoan();
+    const y = rl.firstYear + Math.floor((rl.firstMonth + k) / 12);
+    const m = (rl.firstMonth + k) % 12;
+    const last = new Date(y, m + 1, 0).getDate();
+    const day = Math.min(rl.payDay || 30, last);
+    return `${y}-${String(m + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  },
+
+  raulLoanCompute(today = todayISO()) {
+    const rl = this.state?.raulLoan || defaultRaulLoan();
+    const MONTO = money(rl.principal || 81500);
+    const CUOTA = money(rl.installment || 7750);
+    const N = Number(rl.termMonths) || 12;
+
+    // Tasa mensual implícita del acuerdo (12 cuotas de 7,750 sobre 81,500)
+    let rate = 0.02;
+    for (let k = 0; k < 60; k++) {
+      const f = MONTO * rate / (1 - Math.pow(1 + rate, -N)) - CUOTA;
+      const h = 1e-7;
+      const f2 = MONTO * (rate + h) / (1 - Math.pow(1 + rate + h, -N)) - CUOTA;
+      rate -= f / ((f2 - f) / h);
+    }
+
+    const remaining = bal => {
+      let total = 0, n = 0, b = bal;
+      while (b > 0.5 && n < 600) {
+        const owe = b * (1 + rate);
+        const p = Math.min(CUOTA, owe);
+        total += p;
+        b = owe - p;
+        n++;
+      }
+      return { total, n };
+    };
+
+    const list = [...(rl.payments || [])].sort((a, b) => String(a.fecha).localeCompare(String(b.fecha)));
+    let bal = MONTO, rows = [], k = 0, pi = 0, ahorroTot = 0, waits = 0;
+    while (k < 60) {
+      const d = this.raulDue(k);
+      const p = list[pi];
+      if (p) {
+        const prevFalta = remaining(bal).total;
+        const newBal = Math.max(0, bal * (1 + rate) - Number(p.monto));
+        const falta = remaining(newBal).total;
+        const ahorro = Math.max(0, prevFalta - Number(p.monto) - falta);
+        ahorroTot += ahorro;
+        rows.push({ k, d, p, ahorro, falta, state: 'ok', extra: Math.max(0, Number(p.monto) - CUOTA) });
+        bal = newBal;
+        pi++;
+      } else {
+        if (bal <= 0.5) break;
+        if (d < today) {
+          bal = bal * (1 + rate);
+          rows.push({ k, d, p: null, falta: remaining(bal).total, state: 'late' });
+        } else {
+          if (waits >= remaining(bal).n) break;
+          rows.push({ k, d, p: null, falta: null, state: 'wait' });
+          waits++;
+        }
+      }
+      k++;
+    }
+    const pagado = money(list.reduce((s, p) => s + (Number(p.monto) || 0), 0));
+    const falta = bal > 0.5 ? remaining(bal).total : 0;
+    const nextRow = rows.find(r => r.state === 'wait' || r.state === 'late') || null;
+    const lastRem = remaining(bal);
+    return {
+      MONTO, CUOTA, N, rate,
+      rows, pagado, falta, ahorroTot, bal, nextRow,
+      count: list.length,
+      left: lastRem.n,
+      lastTotal: lastRem.total,
+      movements: rl.movements || [],
+    };
+  },
+
+  addRaulPayment({ fecha, monto, por = 'dueno', email = '', recordExpense = false }) {
+    if (!this.state.raulLoan) this.state.raulLoan = defaultRaulLoan();
+    const rl = this.state.raulLoan;
+    const now = Date.now();
+    const dObj = new Date(now);
+    const pad = n => String(n).padStart(2, '0');
+    const cuando = `${dObj.getFullYear()}-${pad(dObj.getMonth() + 1)}-${pad(dObj.getDate())} ${pad(dObj.getHours())}:${pad(dObj.getMinutes())}`;
+    const cleanMonto = money(Math.round(Number(monto) || 0));
+    const cleanFecha = String(fecha || todayISO()).slice(0, 10);
+    const id = uid();
+
+    const p = { id, fecha: cleanFecha, monto: cleanMonto, createdAt: now, updatedAt: now };
+    rl.payments.push(p);
+    rl.movements.push({
+      id: uid(),
+      accion: 'pago',
+      paymentId: id,
+      fecha: cleanFecha,
+      monto: cleanMonto,
+      cuando,
+      por,
+      email,
+    });
+    rl.updatedAt = now;
+
+    if (recordExpense) {
+      this.state.expenses.push({
+        id: uid(),
+        amount: cleanMonto,
+        desc: 'Pago préstamo Raúl',
+        categoryId: 'deudas',
+        methodId: 'transferencia',
+        date: cleanFecha,
+        note: `Cuota registrada en Control del Préstamo (Raúl)`,
+        raulPaymentId: id,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+
+    this.save();
+    return p;
+  },
+
+  deleteRaulPayment(id, { por = 'dueno', email = '' } = {}) {
+    if (!this.state.raulLoan) return false;
+    const rl = this.state.raulLoan;
+    const gone = rl.payments.find(p => p.id === id);
+    if (!gone) return false;
+    const now = Date.now();
+    const dObj = new Date(now);
+    const pad = n => String(n).padStart(2, '0');
+    const cuando = `${dObj.getFullYear()}-${pad(dObj.getMonth() + 1)}-${pad(dObj.getDate())} ${pad(dObj.getHours())}:${pad(dObj.getMinutes())}`;
+
+    this.recordDeletion(id);
+    rl.payments = rl.payments.filter(p => p.id !== id);
+    rl.movements.push({
+      id: uid(),
+      accion: 'borrado',
+      paymentId: id,
+      fecha: gone.fecha,
+      monto: gone.monto,
+      cuando,
+      por,
+      email,
+    });
+    rl.updatedAt = now;
+
+    // Si se había anotado también como gasto vinculado, eliminarlo
+    const linked = this.state.expenses.filter(e => e.raulPaymentId === id);
+    linked.forEach(e => this.recordDeletion(e.id));
+    this.state.expenses = this.state.expenses.filter(e => e.raulPaymentId !== id);
+
+    this.save();
+    return true;
   },
 
   /* ---------- Backup ---------- */

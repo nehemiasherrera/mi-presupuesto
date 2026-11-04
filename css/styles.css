@@ -399,3 +399,125 @@ input[type="color"] { padding: 2px; width: 38px; height: 34px; cursor: pointer; 
   .month-label { min-width: 120px; }
   .row-actions .icon-btn.sm { opacity: .8; }
 }
+
+/* ---------- Vista aislada (invitado con una sola pestaña) ---------- */
+.app.single-view { grid-template-columns: 1fr; }
+.app.single-view .sidebar { display: none !important; }
+.app.single-view .main { max-width: 920px; margin: 0 auto; width: 100%; padding-bottom: 48px; }
+
+.role-banner {
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: 14px;
+  padding: 10px 16px;
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 13.5px;
+}
+
+/* ---------- Libreta Préstamo Raúl ---------- */
+.rl-wrap { display: flex; flex-direction: column; gap: 18px; max-width: 900px; }
+.rl-terms { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.rl-chip {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 999px; padding: 6px 13px; font-size: 13px; color: var(--muted);
+}
+.rl-chip b { color: var(--text); font-weight: 700; }
+.rl-chip.cuota { background: var(--accent); border-color: var(--accent); color: #fff; }
+.rl-chip.cuota b { color: #fff; }
+
+.rl-hero {
+  display: grid; grid-template-columns: auto 1fr; gap: 22px; align-items: center;
+}
+.rl-ring { width: 150px; height: 150px; position: relative; flex-shrink: 0; }
+.rl-ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+.rl-ring .center {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+}
+.rl-ring .pct { font-weight: 800; font-size: 32px; line-height: 1; }
+.rl-ring .lbl { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.rl-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 18px; min-width: 0; }
+.rl-stat .v { font-weight: 800; font-size: clamp(20px, 4vw, 26px); line-height: 1.15; font-variant-numeric: tabular-nums; }
+.rl-stat .k { font-size: 12px; color: var(--muted); }
+.rl-stat.falta .v { color: var(--danger); }
+.rl-stat.pagado .v { color: var(--ok); }
+.rl-stat.ahorro .v { color: var(--warn); }
+.rl-bar { height: 12px; border-radius: 999px; background: var(--input); overflow: hidden; grid-column: 1 / -1; }
+.rl-bar i { display: block; height: 100%; background: var(--ok); border-radius: 999px; transition: width .5s ease; }
+.rl-tip { grid-column: 1 / -1; font-size: 13.5px; color: var(--muted); background: var(--input); border-radius: 10px; padding: 10px 12px; }
+.rl-tip b { color: var(--text); }
+
+.rl-done {
+  background: var(--ok); color: #fff; border-radius: 14px;
+  padding: 16px 18px; font-size: 19px; font-weight: 800;
+}
+
+.rl-form { display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px; align-items: end; }
+.rl-preview {
+  grid-column: 1 / -1; font-size: 13.5px; background: var(--warn-soft);
+  color: var(--text); border: 1px solid var(--warn); border-radius: 10px; padding: 10px 12px;
+}
+
+.rl-extra-explain { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 12px; }
+.rl-step { background: var(--input); border-radius: 10px; padding: 12px; font-size: 13.5px; color: var(--muted); }
+.rl-step b { display: block; font-size: 14.5px; color: var(--text); margin-bottom: 4px; }
+
+.rl-months {
+  display: grid; grid-template-columns: repeat(12, 1fr);
+  gap: 6px; align-items: end; height: 130px; margin-top: 12px;
+}
+.rl-mcol { display: flex; flex-direction: column; align-items: center; gap: 4px; height: 100%; justify-content: flex-end; min-width: 0; }
+.rl-mbar { width: 100%; max-width: 34px; border-radius: 6px 6px 2px 2px; background: var(--input); position: relative; border: 1px solid var(--border); }
+.rl-mbar.paid { background: var(--ok); border-color: var(--ok); }
+.rl-mbar.paid.more { background: linear-gradient(to top, var(--ok) 0 var(--base, 100%), var(--warn) var(--base, 100%)); border-color: var(--warn); }
+.rl-mbar.late { background: var(--danger-soft); border: 1px dashed var(--danger); }
+.rl-mlbl { font-size: 10.5px; color: var(--muted); }
+.rl-legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; color: var(--muted); margin-top: 10px; }
+.rl-legend span::before {
+  content: ""; display: inline-block; width: 10px; height: 10px;
+  border-radius: 3px; margin-right: 5px; vertical-align: -1px; background: var(--c);
+}
+
+.rl-table tr.paid td.n { color: var(--ok); font-weight: 700; }
+.rl-table tr.late { background: var(--danger-soft); }
+.rl-table tr.next { background: var(--accent-soft); }
+.rl-xtra { color: var(--warn); font-weight: 700; font-size: 12px; display: block; }
+.rl-pill { display: inline-block; font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 999px; }
+.rl-pill.ok { background: var(--ok-soft); color: var(--ok); }
+.rl-pill.late { background: var(--danger); color: #fff; }
+.rl-pill.next { background: var(--accent); color: #fff; }
+.rl-pill.wait { background: var(--input); color: var(--muted); }
+
+.rl-log { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; }
+.rl-log li {
+  display: grid; grid-template-columns: auto 1fr auto; gap: 4px 12px;
+  align-items: baseline; padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 13.5px;
+}
+.rl-log li:last-child { border-bottom: 0; }
+.rl-tag { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 999px; text-transform: uppercase; letter-spacing: .05em; }
+.rl-tag.add { background: var(--ok-soft); color: var(--ok); }
+.rl-tag.del { background: var(--danger-soft); color: var(--danger); }
+.rl-tag.edit { background: var(--warn-soft); color: var(--warn); }
+.rl-log .when { font-size: 12px; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.rl-log .who { grid-column: 2 / -1; font-size: 12px; color: var(--muted); }
+
+.perm-grid { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.perm-check {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--input); border: 1px solid var(--border);
+  border-radius: 999px; padding: 4px 10px; font-size: 12px; cursor: pointer;
+}
+.perm-check input { width: auto; margin: 0; }
+
+@media (max-width: 640px) {
+  .rl-hero { grid-template-columns: 1fr; justify-items: center; }
+  .rl-stats { width: 100%; }
+  .rl-form { grid-template-columns: 1fr 1fr; }
+  .rl-form button[type="submit"] { grid-column: 1 / -1; }
+  .rl-extra-explain { grid-template-columns: 1fr; }
+}

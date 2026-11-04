@@ -154,8 +154,19 @@ const TITLES = {
   presupuesto: ['Presupuesto', 'Planifica tus ingresos y gastos por quincena'],
   gastos: ['Gastos', 'Anota todo lo que gastas, por pequeño que sea'],
   prestamos: ['Préstamos', 'Balance actual, intereses, cuotas y progreso de amortización'],
+  raul: ['Control del Préstamo · Raúl', 'Libreta de pagos · 12 cuotas los días 30 iniciando el 30/10/2026'],
   cobros: ['', 'Pedidos y courier que te deben'],
   ajustes: ['Ajustes', 'Personaliza la aplicación'],
+};
+
+const VIEW_LABELS = {
+  raul: '🤝 Préstamo Raúl',
+  cobros: '📦 Por cobrar',
+  resumen: '📊 Resumen',
+  presupuesto: '🗓️ Presupuesto',
+  gastos: '🧾 Gastos',
+  prestamos: '🏦 Préstamos',
+  ajustes: '⚙️ Ajustes',
 };
 
 function daysUntilDate(iso) {
@@ -180,7 +191,55 @@ function render() {
   document.documentElement.style.setProperty('--accent', s.accent);
   document.documentElement.style.setProperty('--accent-soft', hexA(s.accent, 0.16));
 
-  const [t, sub] = TITLES[UI.view];
+  const eff = typeof Cloud !== 'undefined'
+    ? Cloud.effectivePermissions()
+    : { views: Object.keys(TITLES), canEdit: true, isRestricted: false, isOwner: true, previewingAs: null };
+
+  if (!eff.views.includes(UI.view)) {
+    UI.view = eff.views[0] || 'raul';
+  }
+
+  // Ocultar/mostrar pestañas según permisos del usuario o vista previa
+  $$('.nav-item').forEach(b => {
+    const allowed = eff.views.includes(b.dataset.view);
+    b.hidden = !allowed;
+    b.style.display = allowed ? '' : 'none';
+    b.classList.toggle('active', b.dataset.view === UI.view);
+  });
+
+  // Si solo tiene permiso a 1 pestaña (ej. Raúl), ocultar barra lateral y botones de gastos
+  const isSingleView = eff.views.length === 1;
+  $('.app')?.classList.toggle('single-view', isSingleView);
+  const canAddExp = eff.views.includes('gastos') && eff.canEdit && !isSingleView;
+  const fabEl = $('#fab');
+  if (fabEl) fabEl.style.display = canAddExp ? '' : 'none';
+  const sideFoot = $('#sidebarFoot');
+  if (sideFoot) sideFoot.hidden = !canAddExp;
+
+  // Banner superior para vista previa de rol o invitado con acceso limitado
+  const banner = $('#roleBanner');
+  if (banner) {
+    if (eff.previewingAs) {
+      banner.hidden = false;
+      banner.className = 'role-banner';
+      banner.innerHTML = `
+        <div>👁️ <b>Vista previa como invitado: ${esc(eff.previewingAs)}</b> · ${eff.canEdit ? '✏️ Puede editar' : '🔒 Solo lectura (seguimiento)'} · Pestañas visibles: <b>${eff.views.map(v => VIEW_LABELS[v] || v).join(', ')}</b></div>
+        <button class="btn btn-sm btn-primary" data-action="exitPreviewRole">Salir de vista previa</button>
+      `;
+    } else if (eff.isRestricted && typeof Cloud !== 'undefined' && Cloud.user) {
+      banner.hidden = false;
+      banner.className = 'role-banner';
+      banner.innerHTML = `
+        <div>👋 Conectado como <b>${esc(Cloud.user.email)}</b> · ${eff.canEdit ? '✏️ Modo edición' : '👁️ Modo seguimiento (solo lectura)'}</div>
+        <button class="btn btn-sm btn-ghost" data-action="signOut">🚪 Cerrar sesión</button>
+      `;
+    } else {
+      banner.hidden = true;
+      banner.innerHTML = '';
+    }
+  }
+
+  const [t, sub] = TITLES[UI.view] || TITLES.resumen;
   const debtors = Store.state.debtors || [];
   if (UI.debtPerson !== 'all' && !debtors.some(p => p.id === UI.debtPerson)) {
     UI.debtPerson = debtors[0]?.id || 'all';
@@ -191,8 +250,7 @@ function render() {
     : t;
   $('#pageSub').textContent = sub;
   $('#monthLabel').textContent = monthName(UI.month);
-  $('.month-picker').classList.toggle('invisible', UI.view === 'ajustes' || UI.view === 'cobros' || UI.view === 'prestamos');
-  $$('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.view === UI.view));
+  $('.month-picker').classList.toggle('invisible', UI.view === 'ajustes' || UI.view === 'cobros' || UI.view === 'prestamos' || UI.view === 'raul');
 
   $('#navCobrosLabel').textContent = debtors.length > 1 ? 'Por cobrar' : (debtors[0]?.name || 'Por cobrar');
   const owed = Store.totalOwed();
@@ -208,8 +266,23 @@ function render() {
     if (soon.length > 0) pBadge.textContent = soon[0] < 0 ? 'Vencido' : soon[0] === 0 ? 'Hoy' : `${soon[0]}d`;
   }
 
-  const views = { resumen: viewResumen, presupuesto: viewPresupuesto, gastos: viewGastos, prestamos: viewPrestamos, cobros: viewCobros, ajustes: viewAjustes };
-  $('#view').innerHTML = views[UI.view]();
+  const rBadge = $('#navRaulBadge');
+  if (rBadge) {
+    const rs = Store.raulLoanCompute();
+    rBadge.hidden = rs.falta <= 0;
+    rBadge.textContent = rs.falta > 0 ? `${rs.left}c` : '';
+  }
+
+  const views = {
+    resumen: viewResumen,
+    presupuesto: viewPresupuesto,
+    gastos: viewGastos,
+    prestamos: viewPrestamos,
+    raul: viewPrestamoRaul,
+    cobros: viewCobros,
+    ajustes: viewAjustes,
+  };
+  $('#view').innerHTML = (views[UI.view] || viewResumen)();
   $('#view').classList.remove('fade'); void $('#view').offsetWidth; $('#view').classList.add('fade');
 }
 
@@ -756,6 +829,240 @@ function loanForm(l = {}) {
   </form>`;
 }
 
+/* ---------------- PRÉSTAMO RAÚL (LIBRETA DE PAGOS) ---------------- */
+function dmyDate(iso) {
+  if (!iso || typeof iso !== 'string') return '—';
+  const [y, m, d] = iso.slice(0, 10).split('-');
+  return d && m && y ? `${d}/${m}/${y}` : iso;
+}
+
+function fmtRaul(n) {
+  const cur = Store.state?.settings?.currency || 'RD$';
+  return `${cur}${Math.round(Number(n) || 0).toLocaleString('en-US')}`;
+}
+
+function viewPrestamoRaul() {
+  const s = Store.raulLoanCompute();
+  const eff = typeof Cloud !== 'undefined'
+    ? Cloud.effectivePermissions()
+    : { views: ['raul'], canEdit: true, isOwner: true, previewingAs: null };
+  const canWrite = eff.canEdit && eff.views.includes('raul');
+  const isOwner = eff.isOwner;
+  const pctVal = s.pagado + s.falta > 0 ? s.pagado / (s.pagado + s.falta) : 1;
+  const done = s.bal <= 0.5;
+  const totalInicial = s.CUOTA * s.N;
+
+  // Texto de próximo pago
+  let tipHtml = '';
+  if (done) {
+    tipHtml = 'Todo pagado. No queda nada pendiente.';
+  } else {
+    const nxt = s.nextRow;
+    const ultimo = Math.min(s.CUOTA, s.lastTotal - s.CUOTA * (s.left - 1));
+    const fechaTxt = dmyDate(nxt ? nxt.d : Store.raulDue(s.count));
+    const montoTxt = fmtRaul(Math.min(s.CUOTA, s.falta));
+    tipHtml = `${nxt && nxt.state === 'late' ? '<b>Pago atrasado</b> del ' : 'Próximo pago: '}<b>${esc(fechaTxt)}</b> por <b>${esc(montoTxt)}</b>.`;
+    tipHtml += ` Con la cuota fija le quedan <b>${s.left} ${s.left === 1 ? 'pago' : 'pagos'}</b>`;
+    if (s.left > 1 && ultimo < s.CUOTA - 1) {
+      tipHtml += `, el último de solo <b>${esc(fmtRaul(ultimo))}</b>`;
+    }
+    tipHtml += '.';
+  }
+
+  // Barras por mes
+  const MES = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+  const showRows = s.rows.slice(0, Math.max(12, s.rows.length));
+  const maxV = Math.max(s.CUOTA * 1.15, ...showRows.map(r => (r.p ? Number(r.p.monto) : 0)));
+  const monthsHtml = showRows.map(r => {
+    const [, m] = String(r.d || '').split('-');
+    const v = r.p ? Number(r.p.monto) : s.CUOTA;
+    const h = Math.max(6, (v / maxV) * 100);
+    let cls = 'rl-mbar';
+    let style = `height:${h.toFixed(1)}%`;
+    if (r.p) {
+      cls += ' paid';
+      if (Number(r.p.monto) > s.CUOTA) {
+        cls += ' more';
+        style += `;--base:${((s.CUOTA / Number(r.p.monto)) * 100).toFixed(1)}%`;
+      }
+    } else if (r.state === 'late') {
+      cls += ' late';
+    }
+    const title = r.p ? `${fmtRaul(r.p.monto)} el ${dmyDate(r.p.fecha)}` : (r.state === 'late' ? 'Atrasado' : 'Pendiente');
+    const mIdx = Math.max(0, Math.min(11, (Number(m) || 1) - 1));
+    return `<div class="rl-mcol"><div class="${cls}" style="${style}" title="${esc(title)}"></div><span class="rl-mlbl">${MES[mIdx]}</span></div>`;
+  }).join('');
+
+  // Último índice con pago para permitir borrar solo el último
+  let lastPaidIdx = -1;
+  s.rows.forEach((r, idx) => { if (r.p) lastPaidIdx = idx; });
+
+  const tableRowsHtml = s.rows.map((r, idx) => {
+    const isNext = s.nextRow === r && r.state === 'wait';
+    const cls = r.p ? 'paid' : (r.state === 'late' ? 'late' : (isNext ? 'next' : ''));
+    const pill = r.p
+      ? '<span class="rl-pill ok">Pagado</span>'
+      : r.state === 'late'
+        ? '<span class="rl-pill late">Atrasado</span>'
+        : isNext
+          ? '<span class="rl-pill next">Próximo</span>'
+          : '<span class="rl-pill wait">Pendiente</span>';
+    const montoHtml = r.p
+      ? `${esc(fmtRaul(r.p.monto))}${r.extra > 0 ? `<span class="rl-xtra">+${esc(fmtRaul(r.extra))} extra a la deuda</span>` : ''}`
+      : '—';
+    const ahorroHtml = r.p && r.ahorro >= 1
+      ? `<span style="color:var(--warn);font-weight:700">${esc(fmtRaul(r.ahorro))}</span>`
+      : (r.p ? '—' : '');
+    const canDelRow = r.p && canWrite && isOwner && idx === lastPaidIdx;
+    const delBtn = canDelRow
+      ? ` <button class="btn btn-sm btn-ghost danger" data-action="delRaulPayment" data-id="${esc(r.p.id)}" type="button" style="margin-left:6px;padding:4px 8px;font-size:11px">Borrar</button>`
+      : '';
+    return `<tr class="${cls}">
+      <td class="n" style="text-align:center">${r.k + 1}</td>
+      <td>${esc(dmyDate(r.d))}</td>
+      <td>${r.p ? esc(dmyDate(r.p.fecha)) : '—'}</td>
+      <td class="num">${montoHtml}</td>
+      <td class="num">${ahorroHtml}</td>
+      <td class="num">${r.falta == null ? '' : esc(fmtRaul(r.falta))}</td>
+      <td>${pill}${delBtn}</td>
+    </tr>`;
+  }).join('');
+
+  // Historial inmutable
+  const movs = s.movements || [];
+  const logHtml = !movs.length
+    ? '<li class="muted small" style="padding:8px 0">Todavía no hay movimientos registrados.</li>'
+    : [...movs].reverse().map(m => {
+        const tag = m.accion === 'borrado'
+          ? '<span class="rl-tag del">Borrado</span>'
+          : m.accion === 'ajuste'
+            ? '<span class="rl-tag edit">Ajuste</span>'
+            : '<span class="rl-tag add">Pago</span>';
+        const [dd, hh] = String(m.cuando || '').split(' ');
+        const txt = m.nota
+          ? esc(m.nota)
+          : `${m.accion === 'borrado' ? 'Se borró el pago de ' : 'Se anotó un pago de '}<b>${esc(fmtRaul(m.monto))}</b> con fecha ${esc(dmyDate(m.fecha))}`;
+        const who = m.email
+          ? `Por: ${esc(m.email)}`
+          : (m.por === 'dueno' ? 'Por: Nehemías / Administración' : 'Por: Usuario autorizado');
+        return `<li>${tag}<span>${txt}</span><span class="when">${dd ? esc(dmyDate(dd)) : ''}${hh ? ` · ${esc(hh)}` : ''}</span><span class="who">${who}</span></li>`;
+      }).join('');
+
+  const defaultFecha = s.nextRow ? s.nextRow.d : Store.raulDue(s.count);
+  const defaultMonto = Math.round(Math.min(s.CUOTA, Math.max(s.falta, 0)) || s.CUOTA);
+
+  return `
+    <div class="rl-wrap">
+      <div class="rl-terms">
+        <span class="rl-chip">Prestado <b class="num">${esc(fmtRaul(s.MONTO))}</b></span>
+        <span class="rl-chip cuota">Cuota fija <b class="num">${esc(fmtRaul(s.CUOTA))}</b> al mes</span>
+        <span class="rl-chip">Se paga <b>los días 30</b></span>
+        <span class="rl-chip"><b>${s.N}</b> pagos · total <b class="num">${esc(fmtRaul(totalInicial))}</b></span>
+        <span class="spacer"></span>
+        ${isOwner && !eff.previewingAs ? `
+          <button class="btn btn-sm" data-action="previewAsRaul" title="Ver exactamente lo que verá Raúl cuando entre con su correo">👁️ Ver como lo verá Raúl</button>
+        ` : ''}
+      </div>
+
+      <section class="card rl-hero" aria-label="Resumen del préstamo">
+        <div class="rl-ring">
+          <svg viewBox="0 0 120 120" aria-hidden="true">
+            <circle cx="60" cy="60" r="50" fill="none" stroke="var(--input)" stroke-width="14"/>
+            <circle cx="60" cy="60" r="50" fill="none" stroke="var(--ok)" stroke-width="14" stroke-linecap="round" stroke-dasharray="${(pctVal * 314.16).toFixed(2)} 314.16"/>
+          </svg>
+          <div class="center">
+            <span class="pct num">${Math.round(pctVal * 100)}%</span>
+            <span class="lbl">pagado</span>
+          </div>
+        </div>
+        <div class="rl-stats">
+          <div class="rl-stat pagado"><div class="v num">${esc(fmtRaul(s.pagado))}</div><div class="k">Total pagado</div></div>
+          <div class="rl-stat falta"><div class="v num">${esc(fmtRaul(s.falta))}</div><div class="k">Falta por pagar</div></div>
+          <div class="rl-stat"><div class="v num">${s.count} de ${s.count + s.left}</div><div class="k">Pagos hechos</div></div>
+          <div class="rl-stat ahorro"><div class="v num">${esc(fmtRaul(s.ahorroTot))}</div><div class="k">Ahorro por pagar de más</div></div>
+          <div class="rl-bar"><i style="width:${(pctVal * 100).toFixed(1)}%"></i></div>
+          <div class="rl-tip">${tipHtml}</div>
+        </div>
+      </section>
+
+      ${done ? `<div class="rl-done">¡Préstamo saldado! Gracias por cumplir. 🎉</div>` : ''}
+
+      ${canWrite && !done ? `
+        <section class="card">
+          <div class="card-head">
+            <h3>✍️ Anotar un pago</h3>
+            <span class="muted small">La fecha y el monto ya vienen con la cuota que toca</span>
+          </div>
+          <form data-submit="raulPayment" class="rl-form">
+            <label>Fecha en que pagó
+              <input type="date" name="fecha" id="rlFecha" value="${esc(defaultFecha)}" required>
+            </label>
+            <label>Cuánto pagó (${esc(Store.state.settings.currency)})
+              <input type="number" name="monto" id="rlMonto" min="1" step="1" inputmode="numeric" value="${defaultMonto}" required>
+            </label>
+            <button type="submit" class="btn btn-primary" style="height:42px">Guardar pago</button>
+            <div class="rl-preview" id="rlPreview" hidden></div>
+            ${isOwner ? `
+              <label class="toggle small" style="grid-column:1/-1;margin-top:4px">
+                <input type="checkbox" name="recordExpense" checked>
+                <span></span> Anotar también automáticamente en mi pestaña de Gastos del mes
+              </label>
+            ` : ''}
+          </form>
+        </section>
+      ` : ''}
+
+      <section class="card">
+        <h3>💡 Si paga más de la cuota, ¿a dónde va?</h3>
+        <div class="rl-extra-explain">
+          <div class="rl-step"><b>1. Todo lo extra baja la deuda</b>Lo que pase de ${esc(fmtRaul(s.CUOTA))} se rebaja completo de lo que falta. Se marca en dorado en la tabla.</div>
+          <div class="rl-step"><b>2. Y encima ahorra</b>Como la deuda queda más baja, los meses que siguen cuestan menos. Ese ahorro se ve en la columna «Ahorro».</div>
+          <div class="rl-step"><b>3. Termina antes</b>Sigue pagando la misma cuota y el último pago llega antes. Arriba dice cuántos pagos quedan.</div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h3>📊 Pagos por mes</h3>
+        <div class="rl-months" style="grid-template-columns:repeat(${showRows.length}, 1fr)" aria-label="Gráfico de pagos por mes">
+          ${monthsHtml}
+        </div>
+        <div class="rl-legend">
+          <span style="--c:var(--ok)">Cuota pagada</span>
+          <span style="--c:var(--warn)">Extra</span>
+          <span style="--c:var(--input)">Pendiente</span>
+          <span style="--c:var(--danger)">Atrasado</span>
+        </div>
+      </section>
+
+      <section class="card">
+        <h3>📋 Detalle de pagos</h3>
+        <div class="table-wrap" style="margin-top:10px">
+          <table class="table rl-table">
+            <thead>
+              <tr>
+                <th style="text-align:center">#</th>
+                <th>Fecha que toca</th>
+                <th>Fecha en que pagó</th>
+                <th class="num">Cuánto pagó</th>
+                <th class="num">Ahorro</th>
+                <th class="num">Falta por pagar</th>
+                <th>Estado</th>
+              </tr>
+            </thead>
+            <tbody>${tableRowsHtml}</tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="card">
+        <h3>🕒 Historial de movimientos</h3>
+        <p class="muted small" style="margin:4px 0 0">Cada pago anotado o borrado queda registrado aquí con el día y la hora. Este historial no se puede borrar.</p>
+        <ul class="rl-log">${logHtml}</ul>
+      </section>
+    </div>
+  `;
+}
+
 /* ---------------- COBROS (PRISCILA, RAÚL, ETC.) ---------------- */
 const DEBT_TYPES = {
   inicial: { label: 'Saldo anterior', icon: '🗂️' },
@@ -990,38 +1297,87 @@ function viewAjustes() {
         </div>
 
         <div class="card">
-          <div class="card-head"><h3>☁️ Nube y personas con acceso</h3></div>
+          <div class="card-head"><h3>☁️ Nube, roles y personas con acceso</h3></div>
           ${typeof Cloud !== 'undefined' && Cloud.enabled && Cloud.user ? `
             <p class="muted">Sesión iniciada como <b>${esc(Cloud.user.email)}</b>. Todo lo que anotes se sincroniza en tiempo real.</p>
           ` : `
-            <p class="muted">Aún no has iniciado sesión en la nube. Haz clic abajo para conectar tu cuenta de Google.</p>
-            <div class="row-gap" style="margin-bottom:14px">
-              <button class="btn btn-primary" data-action="signIn">🔐 Conectar con Google</button>
-            </div>
+            <p class="muted">Configura quién puede entrar y qué pestañas puede ver cada invitado (por ejemplo, darle acceso a <b>Raúl</b> únicamente a <b>🤝 Préstamo Raúl</b> en modo lectura).</p>
+            ${typeof Cloud !== 'undefined' && Cloud.enabled ? `
+              <div class="row-gap" style="margin-bottom:14px">
+                <button class="btn btn-primary" data-action="signIn">🔐 Conectar con Google</button>
+              </div>
+            ` : ''}
           `}
-          <div class="sub-title">Correos autorizados y última entrada</div>
+          <div class="sub-title">Administradores principales (acceso total)</div>
           <div class="list compact" style="margin-bottom:12px">
             ${(typeof Cloud !== 'undefined' ? Cloud.owners() : []).map(em => `
               <div class="row">
                 <div class="row-ico" style="background:var(--ok-soft)">👑</div>
-                <div class="row-main"><div class="row-title">${esc(em)}</div><div class="row-meta">Administrador fijo · ${esc(lastSeenLabel(em))}</div></div>
-              </div>`).join('')}
-            ${(typeof Cloud !== 'undefined' ? Cloud.extraEmails : []).map(em => `
-              <div class="row">
-                <div class="row-ico" style="background:var(--accent-soft)">👤</div>
-                <div class="row-main"><div class="row-title">${esc(em)}</div><div class="row-meta">Invitado · ${esc(lastSeenLabel(em))}</div></div>
-                ${Cloud.isOwner() ? `<button class="icon-btn sm" data-action="removeAccessEmail" data-email="${esc(em)}" title="Quitar acceso">🗑️</button>` : ''}
+                <div class="row-main"><div class="row-title">${esc(em)}</div><div class="row-meta">Propietario · Acceso completo · ${esc(lastSeenLabel(em))}</div></div>
               </div>`).join('')}
           </div>
+
+          <div class="sub-title">Invitados y permisos por sección</div>
+          <div class="list compact" style="margin-bottom:12px">
+            ${(typeof Cloud !== 'undefined' && Cloud.extraEmails.length) ? Cloud.extraEmails.map(em => {
+              const gp = Cloud.guestPermission(em);
+              const viewBadges = gp.views.map(v => VIEW_LABELS[v] || v).join(' · ');
+              return `
+              <div class="row">
+                <div class="row-ico" style="background:var(--accent-soft)">👤</div>
+                <div class="row-main">
+                  <div class="row-title">${esc(gp.label ? `${gp.label} (${em})` : em)}</div>
+                  <div class="row-meta">
+                    <b>${gp.canEdit ? '✏️ Ver y editar' : '👁️ Solo lectura'}</b> · ve: ${esc(viewBadges)} · ${esc(lastSeenLabel(em))}
+                  </div>
+                </div>
+                ${Cloud.isOwner() ? `
+                  <div class="row-actions" style="opacity:1">
+                    <button class="icon-btn sm" data-action="previewAsGuest" data-email="${esc(em)}" title="Ver pantalla como este invitado" aria-label="Previsualizar como ${esc(em)}">👁️</button>
+                    <button class="icon-btn sm" data-action="editGuestAccess" data-email="${esc(em)}" title="Configurar permisos y secciones" aria-label="Permisos de ${esc(em)}">⚙️</button>
+                    <button class="icon-btn sm" data-action="removeAccessEmail" data-email="${esc(em)}" title="Quitar acceso" aria-label="Quitar acceso a ${esc(em)}">🗑️</button>
+                  </div>
+                ` : ''}
+              </div>`;
+            }).join('') : `<div class="muted small" style="padding:8px 0">Aún no has agregado invitados con acceso restringido.</div>`}
+          </div>
+
           ${typeof Cloud !== 'undefined' && Cloud.lastUpdatedBy ? `<div class="muted small" style="margin-bottom:12px">📝 Último cambio guardado por: <b>${esc(Cloud.lastUpdatedBy)}</b></div>` : ''}
-          ${typeof Cloud !== 'undefined' && Cloud.enabled && Cloud.user && Cloud.isOwner() ? `
-            <form data-submit="addAccessEmail" class="row-gap" style="margin-bottom:14px">
-              <input name="email" type="email" placeholder="nuevo.correo@gmail.com" required style="flex:1">
-              <button class="btn btn-primary">＋ Autorizar correo</button>
+          ${typeof Cloud !== 'undefined' && Cloud.isOwner() ? `
+            <form data-submit="addAccessEmail" class="form" style="background:var(--input);padding:12px;border-radius:12px;margin-bottom:14px">
+              <div class="sub-title" style="margin:0">＋ Autorizar nuevo invitado</div>
+              <div class="form-row">
+                <label>Correo de Google
+                  <input name="email" type="email" placeholder="raul@gmail.com" required>
+                </label>
+                <label>Nombre (opcional)
+                  <input name="label" placeholder="Ej. Raúl">
+                </label>
+              </div>
+              <div class="form-row">
+                <label>Tipo de permiso
+                  <select name="canEdit">
+                    <option value="0" selected>👁️ Solo ver (modo seguimiento)</option>
+                    <option value="1">✏️ Ver y editar</option>
+                  </select>
+                </label>
+                <label>Acceso rápido a secciones
+                  <select name="preset" data-change="guestPresetChange">
+                    <option value="raul" selected>🤝 Solo Préstamo Raúl</option>
+                    <option value="cobros">📦 Solo Por cobrar</option>
+                    <option value="raul_cobros">🤝 Préstamo Raúl + 📦 Por cobrar</option>
+                    <option value="all">🔓 Todas las secciones</option>
+                  </select>
+                </label>
+              </div>
+              <button class="btn btn-primary">＋ Guardar y autorizar invitado</button>
             </form>
             <div class="row-gap">
-              <button class="btn" data-action="forceCloudPush">☁️ Subir mis datos ahora</button>
-              <button class="btn btn-ghost danger" data-action="signOut">🚪 Cerrar sesión</button>
+              <button class="btn" data-action="previewAsRaul">👁️ Probar vista de Raúl</button>
+              ${Cloud.enabled && Cloud.user ? `
+                <button class="btn" data-action="forceCloudPush">☁️ Subir mis datos ahora</button>
+                <button class="btn btn-ghost danger" data-action="signOut">🚪 Cerrar sesión</button>
+              ` : ''}
             </div>
           ` : ''}
         </div>
@@ -1338,6 +1694,97 @@ const actions = {
   forceCloudPush: () => { if (typeof Cloud !== 'undefined') { Cloud.pushImmediate(Store.state); toast('☁️ Datos enviados a la nube'); } },
   signIn: () => { if (typeof Cloud !== 'undefined') Cloud.signIn(); },
   signOut: () => { if (typeof Cloud !== 'undefined') Cloud.signOut(); },
+
+  /* Préstamo Raúl y Roles */
+  delRaulPayment: el => {
+    if (el.dataset.confirm !== '1') {
+      el.dataset.confirm = '1';
+      el.textContent = '¿Seguro? Toca otra vez';
+      return;
+    }
+    const eff = typeof Cloud !== 'undefined' ? Cloud.effectivePermissions() : { isOwner: true };
+    if (!eff.isOwner) return;
+    const ok = Store.deleteRaulPayment(el.dataset.id, {
+      por: 'dueno',
+      email: (typeof Cloud !== 'undefined' && Cloud.user?.email) || '',
+    });
+    if (ok) {
+      toast('Pago borrado y registrado en el historial');
+      render();
+    }
+  },
+  previewAsRaul: () => {
+    if (typeof Cloud === 'undefined') return;
+    Cloud.setPreviewRole({
+      email: 'raul@invitado',
+      label: 'Raúl',
+      views: ['raul'],
+      canEdit: false,
+    });
+    toast('👁️ Vista previa activada: así lo verá Raúl');
+  },
+  previewAsGuest: el => {
+    if (typeof Cloud === 'undefined') return;
+    const email = el.dataset.email;
+    const gp = Cloud.guestPermission(email);
+    Cloud.setPreviewRole({
+      email,
+      label: gp.label || email,
+      views: gp.views,
+      canEdit: gp.canEdit,
+    });
+    toast(`👁️ Vista previa como ${gp.label || email}`);
+  },
+  exitPreviewRole: () => {
+    if (typeof Cloud === 'undefined') return;
+    Cloud.setPreviewRole(null);
+    toast('Volviste a tu vista de Administrador');
+  },
+  editGuestAccess: el => {
+    const email = el.dataset.email;
+    const gp = Cloud.guestPermission(email);
+    const selectableViews = ['raul', 'cobros', 'resumen', 'presupuesto', 'gastos', 'prestamos'];
+    openModal(`Permisos · ${gp.label || email}`, `<form id="modalForm" class="form">
+      <label>Nombre / Etiqueta
+        <input name="label" value="${esc(gp.label || '')}" placeholder="Ej. Raúl">
+      </label>
+      <label>Modo de acceso
+        <select name="canEdit">
+          <option value="0" ${!gp.canEdit ? 'selected' : ''}>👁️ Solo ver (modo seguimiento)</option>
+          <option value="1" ${gp.canEdit ? 'selected' : ''}>✏️ Ver y editar</option>
+        </select>
+      </label>
+      <div>
+        <div class="muted small" style="font-weight:600;margin-bottom:6px">¿Qué pestañas puede ver esta persona?</div>
+        <div class="perm-grid">
+          ${selectableViews.map(v => `
+            <label class="perm-check">
+              <input type="checkbox" name="view_${v}" ${gp.views.includes(v) ? 'checked' : ''}>
+              <span>${esc(VIEW_LABELS[v] || v)}</span>
+            </label>
+          `).join('')}
+        </div>
+      </div>
+      <div class="form-actions">
+        <button type="button" class="btn" data-action="closeModal">Cancelar</button>
+        <button class="btn btn-primary">Guardar permisos</button>
+      </div>
+    </form>`, async d => {
+      const views = selectableViews.filter(v => Boolean(d[`view_${v}`]));
+      if (!views.length) views.push('raul');
+      try {
+        await Cloud.updateGuestPermissions(email, {
+          label: d.label,
+          canEdit: d.canEdit === '1',
+          views,
+        });
+        toast(`✅ Permisos actualizados para ${d.label || email}`);
+        render();
+      } catch (e) {
+        toast(e.message || 'No se pudieron guardar los permisos', { type: 'err' });
+      }
+    });
+  },
   removeAccessEmail: async el => {
     const email = el.dataset.email;
     if (!confirm(`¿Quitar el acceso a ${email}?`)) return;
@@ -1374,11 +1821,39 @@ document.addEventListener('submit', ev => {
     render();
     return;
   }
+  if (form.dataset.submit === 'raulPayment') {
+    const d = formData(form);
+    const monto = Math.round(Number(d.monto) || 0);
+    if (!d.fecha || !(monto > 0)) return;
+    const eff = typeof Cloud !== 'undefined' ? Cloud.effectivePermissions() : { canEdit: true, isOwner: true };
+    if (!eff.canEdit) return;
+    Store.addRaulPayment({
+      fecha: d.fecha,
+      monto,
+      por: eff.isOwner ? 'dueno' : 'otro',
+      email: (typeof Cloud !== 'undefined' && Cloud.user?.email) || '',
+      recordExpense: Boolean(d.recordExpense),
+    });
+    toast(`✅ Pago de ${fmtRaul(monto)} guardado en el préstamo de Raúl`);
+    render();
+    return;
+  }
   if (form.dataset.submit === 'addAccessEmail') {
     const d = formData(form);
     if (!d.email) return;
-    Cloud.addAllowedEmail(d.email).then(() => {
-      toast(`✅ Acceso otorgado a ${d.email}`);
+    const presetMap = {
+      raul: ['raul'],
+      cobros: ['cobros'],
+      raul_cobros: ['raul', 'cobros'],
+      all: ['resumen', 'presupuesto', 'gastos', 'prestamos', 'raul', 'cobros'],
+    };
+    const views = presetMap[d.preset] || ['raul'];
+    Cloud.addAllowedEmail(d.email, {
+      label: d.label || '',
+      canEdit: d.canEdit === '1',
+      views,
+    }).then(() => {
+      toast(`✅ Acceso configurado para ${d.label || d.email}`);
       form.reset();
       render();
     }).catch(e => toast(e.message || 'No se pudo agregar el correo', { type: 'err' }));
@@ -1399,6 +1874,23 @@ document.addEventListener('submit', ev => {
 
 document.addEventListener('input', ev => {
   const el = ev.target;
+  if (el.id === 'rlMonto') {
+    const v = Number(el.value) || 0;
+    const cuota = Store.state?.raulLoan?.installment || 7750;
+    const box = $('#rlPreview');
+    if (box) {
+      if (v > cuota) {
+        box.hidden = false;
+        box.innerHTML = `Este pago trae <b>${esc(fmtRaul(v - cuota))} extra</b> sobre la cuota. Va completo a rebajar la deuda.`;
+      } else if (v > 0 && v < cuota) {
+        box.hidden = false;
+        box.innerHTML = `Es <b>${esc(fmtRaul(cuota - v))} menos</b> que la cuota. Lo que falta por pagar baja menos este mes.`;
+      } else {
+        box.hidden = true;
+      }
+    }
+    return;
+  }
   if (el.dataset.filter && el.type === 'search') {
     UI.filters.q = el.value;
     UI.expenseLimit = 50;

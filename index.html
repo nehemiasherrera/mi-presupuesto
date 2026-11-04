@@ -10,12 +10,12 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://www.gstatic.com https://apis.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' https://*.googleapis.com https://*.firebaseio.com https://*.firebaseapp.com wss://*.firebaseio.com; frame-src https://*.firebaseapp.com https://accounts.google.com;" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/styles.css?v=6" />
+  <link rel="stylesheet" href="css/styles.css?v=7" />
 </head>
 <body>
   <div class="app">
     <!-- Barra lateral -->
-    <aside class="sidebar">
+    <aside class="sidebar" id="sidebar">
       <div class="brand">
         <div class="brand-logo">💰</div>
         <div>
@@ -28,10 +28,11 @@
         <button class="nav-item" data-view="presupuesto"><span class="nav-ico">🗓️</span><span>Presupuesto</span></button>
         <button class="nav-item" data-view="gastos"><span class="nav-ico">🧾</span><span>Gastos</span></button>
         <button class="nav-item" data-view="prestamos"><span class="nav-ico">🏦</span><span>Préstamos</span><span class="nav-badge" id="navPrestamosBadge" hidden></span></button>
-        <button class="nav-item" data-view="cobros"><span class="nav-ico">📦</span><span id="navCobrosLabel">Priscila</span><span class="nav-badge" id="navCobrosBadge" hidden></span></button>
+        <button class="nav-item" data-view="raul"><span class="nav-ico">🤝</span><span>Préstamo Raúl</span><span class="nav-badge" id="navRaulBadge" hidden></span></button>
+        <button class="nav-item" data-view="cobros"><span class="nav-ico">📦</span><span id="navCobrosLabel">Por cobrar</span><span class="nav-badge" id="navCobrosBadge" hidden></span></button>
         <button class="nav-item" data-view="ajustes"><span class="nav-ico">⚙️</span><span>Ajustes</span></button>
       </nav>
-      <div class="sidebar-foot">
+      <div class="sidebar-foot" id="sidebarFoot">
         <button class="btn btn-primary btn-block" id="sideAddExpense">＋ Registrar gasto</button>
         <div class="hint">Atajo: tecla <kbd>N</kbd></div>
       </div>
@@ -39,12 +40,13 @@
 
     <!-- Contenido -->
     <main class="main">
-      <header class="topbar">
+      <div id="roleBanner" hidden></div>
+      <header class="topbar" id="topbar">
         <div>
           <h1 class="page-title" id="pageTitle">Resumen</h1>
           <div class="page-sub" id="pageSub"></div>
         </div>
-        <div class="month-picker">
+        <div class="month-picker" id="monthPicker">
           <button class="icon-btn" id="prevMonth" title="Mes anterior" aria-label="Mes anterior">‹</button>
           <button class="month-label" id="monthLabel" title="Ir al mes actual" aria-label="Ir al mes actual">—</button>
           <button class="icon-btn" id="nextMonth" title="Mes siguiente" aria-label="Mes siguiente">›</button>
@@ -86,10 +88,10 @@
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-  <script src="js/firebase-config.js?v=6"></script>
-  <script src="js/cloud.js?v=6"></script>
-  <script src="js/store.js?v=6"></script>
-  <script src="js/charts.js?v=6"></script>
-  <script src="js/app.js?v=6"></script>
+  <script src="js/firebase-config.js?v=7"></script>
+  <script src="js/cloud.js?v=7"></script>
+  <script src="js/store.js?v=7"></script>
+  <script src="js/charts.js?v=7"></script>
+  <script src="js/app.js?v=7"></script>
 </body>
 </html>

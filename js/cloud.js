@@ -2,18 +2,23 @@
    cloud.js — Autenticación con Google, control de accesos y sincronización (Firestore)
    ========================================================= */
 
+const ALL_VIEW_KEYS = ['resumen', 'presupuesto', 'gastos', 'prestamos', 'cobros', 'raul', 'ajustes'];
+
 const Cloud = {
   enabled: false,
   user: null,
   db: null,
   auth: null,
   unsub: null,
+  unsubRaul: null,
   unsubAccess: null,
   unsubActivity: null,
   pushTimer: null,
   pendingPush: false,
   status: 'local', // 'local' | 'connecting' | 'synced' | 'saving' | 'offline' | 'error'
   extraEmails: [], // correos adicionales autorizados desde Ajustes
+  permissions: {}, // { [email]: { views: ['raul', ...], canEdit: false|true, label: 'Raúl' } }
+  previewRole: null, // { email, label, views, canEdit } para previsualizar como invitado
   activityUsers: {}, // { [email]: { name, email, lastSeenAt } }
   lastUpdatedBy: '',
 
@@ -29,8 +34,72 @@ const Cloud = {
   },
 
   isOwner(email = this.user?.email) {
-    if (!email) return false;
+    if (!email) return !this.enabled; // En modo local (file://), el usuario local es propietario
     return this.owners().includes(email.toLowerCase().trim());
+  },
+
+  guestPermission(email) {
+    const em = String(email || '').toLowerCase().trim();
+    const raw = (this.permissions && this.permissions[em]) || {};
+    const views = Array.isArray(raw.views) && raw.views.length > 0
+      ? raw.views.filter(v => ALL_VIEW_KEYS.includes(v))
+      : ['raul'];
+    return {
+      views: views.length ? views : ['raul'],
+      canEdit: Boolean(raw.canEdit),
+      label: String(raw.label || '').slice(0, 40),
+    };
+  },
+
+  effectivePermissions() {
+    if (this.previewRole) {
+      return {
+        views: this.previewRole.views || ['raul'],
+        canEdit: Boolean(this.previewRole.canEdit),
+        isRestricted: true,
+        isOwner: false,
+        previewingAs: this.previewRole.label || this.previewRole.email || 'Invitado',
+      };
+    }
+    if (!this.enabled || !this.user || this.isOwner(this.user.email)) {
+      return {
+        views: [...ALL_VIEW_KEYS],
+        canEdit: true,
+        isRestricted: false,
+        isOwner: true,
+        previewingAs: null,
+      };
+    }
+    const gp = this.guestPermission(this.user.email);
+    const isFull = gp.views.length >= ALL_VIEW_KEYS.length - 1 && gp.canEdit;
+    return {
+      views: gp.views,
+      canEdit: gp.canEdit,
+      isRestricted: !isFull,
+      isOwner: false,
+      previewingAs: null,
+    };
+  },
+
+  canView(viewKey) {
+    return this.effectivePermissions().views.includes(viewKey);
+  },
+
+  canEdit(viewKey = null) {
+    const eff = this.effectivePermissions();
+    if (!eff.canEdit) return false;
+    return viewKey ? eff.views.includes(viewKey) : true;
+  },
+
+  setPreviewRole(role = null) {
+    this.previewRole = role;
+    if (typeof UI !== 'undefined' && typeof render === 'function') {
+      const eff = this.effectivePermissions();
+      if (!eff.views.includes(UI.view)) {
+        UI.view = eff.views[0] || 'raul';
+      }
+      render();
+    }
   },
 
   allAllowedEmails() {
@@ -102,8 +171,10 @@ const Cloud = {
 
   async signOut() {
     if (this.unsub) { this.unsub(); this.unsub = null; }
+    if (this.unsubRaul) { this.unsubRaul(); this.unsubRaul = null; }
     if (this.unsubAccess) { this.unsubAccess(); this.unsubAccess = null; }
     if (this.unsubActivity) { this.unsubActivity(); this.unsubActivity = null; }
+    this.previewRole = null;
     if (this.auth) await this.auth.signOut();
   },
 
@@ -125,9 +196,14 @@ const Cloud = {
     if (!allowed) {
       try {
         const snap = await this.accessRef().get();
-        const list = (snap.exists && Array.isArray(snap.data()?.emails))
-          ? snap.data().emails.map(e => String(e).toLowerCase().trim())
+        const data = snap.exists ? (snap.data() || {}) : {};
+        const list = Array.isArray(data.emails)
+          ? data.emails.map(e => String(e).toLowerCase().trim())
           : [];
+        if (data.permissions && typeof data.permissions === 'object') {
+          this.permissions = data.permissions;
+        }
+        this.extraEmails = list;
         allowed = list.includes(email);
       } catch (e) {
         allowed = false;
@@ -147,11 +223,19 @@ const Cloud = {
 
     this.user = user;
     if (gate) gate.hidden = true;
+    const eff = this.effectivePermissions();
+    if (typeof UI !== 'undefined' && !eff.views.includes(UI.view)) {
+      UI.view = eff.views[0] || 'raul';
+    }
     this.startSync();
   },
 
   docRef() {
     return this.db.collection('household').doc('main');
+  },
+
+  raulLoanRef() {
+    return this.db.collection('household').doc('raul_loan');
   },
 
   accessRef() {
@@ -182,9 +266,10 @@ const Cloud = {
   },
 
   startSync() {
-    if (this.unsub) this.unsub();
-    if (this.unsubAccess) this.unsubAccess();
-    if (this.unsubActivity) this.unsubActivity();
+    if (this.unsub) { this.unsub(); this.unsub = null; }
+    if (this.unsubRaul) { this.unsubRaul(); this.unsubRaul = null; }
+    if (this.unsubAccess) { this.unsubAccess(); this.unsubAccess = null; }
+    if (this.unsubActivity) { this.unsubActivity(); this.unsubActivity = null; }
     this.status = 'connecting';
     this.updateBadge();
 
@@ -198,17 +283,44 @@ const Cloud = {
     }, () => {});
 
     this.unsubAccess = this.accessRef().onSnapshot(snap => {
-      if (snap.exists && Array.isArray(snap.data()?.emails)) {
-        this.extraEmails = snap.data().emails.map(e => String(e).toLowerCase().trim()).filter(Boolean);
+      const data = snap.exists ? (snap.data() || {}) : {};
+      if (Array.isArray(data.emails)) {
+        this.extraEmails = data.emails.map(e => String(e).toLowerCase().trim()).filter(Boolean);
       } else {
         this.extraEmails = [];
       }
+      this.permissions = (data.permissions && typeof data.permissions === 'object') ? data.permissions : {};
+
       if (this.user && !this.isOwner(this.user.email) && !this.extraEmails.includes(this.user.email.toLowerCase().trim())) {
         this.signOut();
         return;
       }
-      if (typeof UI !== 'undefined' && UI.view === 'ajustes' && typeof render === 'function') render();
+      if (typeof UI !== 'undefined') {
+        const eff = this.effectivePermissions();
+        if (!eff.views.includes(UI.view)) UI.view = eff.views[0] || 'raul';
+        if (typeof render === 'function') render();
+      }
     }, () => {});
+
+    // Suscripción al documento dedicado del Préstamo de Raúl (/household/raul_loan)
+    if (this.isOwner() || this.guestPermission(this.user?.email).views.includes('raul')) {
+      this.unsubRaul = this.raulLoanRef().onSnapshot(snap => {
+        if (snap.exists && snap.data()?.raulLoan) {
+          Store.applyRemoteRaulLoan(snap.data().raulLoan);
+          if (typeof render === 'function') render();
+        }
+        this.status = navigator.onLine === false ? 'offline' : 'synced';
+        this.updateBadge();
+      }, () => {});
+    }
+
+    // Suscripción al documento principal (/household/main) solo si tiene acceso a vistas principales
+    const mainViews = ['resumen', 'presupuesto', 'gastos', 'prestamos', 'cobros', 'ajustes'];
+    const hasMainAccess = this.isOwner() || this.guestPermission(this.user?.email).views.some(v => mainViews.includes(v));
+    if (!hasMainAccess) {
+      if (typeof render === 'function') render();
+      return;
+    }
 
     let firstSnapshot = true;
     this.unsub = this.docRef().onSnapshot(snap => {
@@ -243,29 +355,58 @@ const Cloud = {
     });
   },
 
-  async addAllowedEmail(rawEmail) {
+  async addAllowedEmail(rawEmail, opts = {}) {
     if (!this.isOwner()) throw new Error('Solo los administradores principales pueden gestionar accesos.');
     const email = String(rawEmail || '').toLowerCase().trim();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Ingresa un correo electrónico válido.');
     if (this.owners().includes(email)) throw new Error('Ese correo ya es administrador fijo.');
-    if (this.extraEmails.length >= 25) throw new Error('Se alcanzó el límite máximo de 25 invitados.');
-    const next = [...new Set([...this.extraEmails, email])];
-    await this.accessRef().set({
-      emails: next,
-      updatedBy: this.user.email,
-      updatedAtServer: firebase.firestore.FieldValue.serverTimestamp(),
-    });
+    if (!this.extraEmails.includes(email) && this.extraEmails.length >= 25) {
+      throw new Error('Se alcanzó el límite máximo de 25 invitados.');
+    }
+    const nextEmails = [...new Set([...this.extraEmails, email])];
+    const views = Array.isArray(opts.views) && opts.views.length > 0
+      ? opts.views.filter(v => ALL_VIEW_KEYS.includes(v))
+      : ['raul'];
+    const nextPerms = {
+      ...this.permissions,
+      [email]: {
+        views: views.length ? views : ['raul'],
+        canEdit: Boolean(opts.canEdit),
+        label: String(opts.label || email.split('@')[0]).slice(0, 40),
+      },
+    };
+    this.extraEmails = nextEmails;
+    this.permissions = nextPerms;
+    if (this.enabled && this.db && this.user) {
+      await this.accessRef().set({
+        emails: nextEmails,
+        permissions: nextPerms,
+        updatedBy: this.user.email,
+        updatedAtServer: firebase.firestore.FieldValue.serverTimestamp(),
+      });
+    }
+  },
+
+  async updateGuestPermissions(rawEmail, opts = {}) {
+    return this.addAllowedEmail(rawEmail, opts);
   },
 
   async removeAllowedEmail(rawEmail) {
     if (!this.isOwner()) throw new Error('Solo los administradores principales pueden gestionar accesos.');
     const email = String(rawEmail || '').toLowerCase().trim();
     const next = this.extraEmails.filter(e => e !== email);
-    await this.accessRef().set({
-      emails: next,
-      updatedBy: this.user.email,
-      updatedAtServer: firebase.firestore.FieldValue.serverTimestamp(),
-    });
+    const nextPerms = { ...this.permissions };
+    delete nextPerms[email];
+    this.extraEmails = next;
+    this.permissions = nextPerms;
+    if (this.enabled && this.db && this.user) {
+      await this.accessRef().set({
+        emails: next,
+        permissions: nextPerms,
+        updatedBy: this.user.email,
+        updatedAtServer: firebase.firestore.FieldValue.serverTimestamp(),
+      });
+    }
   },
 
   push(state) {
@@ -291,11 +432,27 @@ const Cloud = {
       return;
     }
     try {
-      await this.docRef().set({
-        state: JSON.parse(JSON.stringify(state)),
-        updatedBy: this.user.email,
-        updatedAtServer: firebase.firestore.FieldValue.serverTimestamp(),
-      });
+      const mainViews = ['resumen', 'presupuesto', 'gastos', 'prestamos', 'cobros', 'ajustes'];
+      const gp = this.guestPermission(this.user.email);
+      const canWriteMain = this.isOwner() || (gp.canEdit && gp.views.some(v => mainViews.includes(v)));
+      const canWriteRaul = this.isOwner() || (gp.canEdit && gp.views.includes('raul'));
+
+      const tasks = [];
+      if (canWriteMain) {
+        tasks.push(this.docRef().set({
+          state: JSON.parse(JSON.stringify(state)),
+          updatedBy: this.user.email,
+          updatedAtServer: firebase.firestore.FieldValue.serverTimestamp(),
+        }));
+      }
+      if (canWriteRaul && state.raulLoan) {
+        tasks.push(this.raulLoanRef().set({
+          raulLoan: JSON.parse(JSON.stringify(state.raulLoan)),
+          updatedBy: this.user.email,
+          updatedAtServer: firebase.firestore.FieldValue.serverTimestamp(),
+        }));
+      }
+      await Promise.all(tasks);
       this.pendingPush = false;
       this.recordPresence();
       this.status = 'synced';
